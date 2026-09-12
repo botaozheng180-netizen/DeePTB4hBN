@@ -6,7 +6,7 @@ Usage
 -----
 Evaluate one checkpoint over the full available non-core DFT spectrum::
 
-    python scripts/evaluate_band_error.py \
+    python evaluation/evaluate_band_error.py \
         --checkpoint RUN/checkpoint/nnsk.epN.pth \
         --set DATA/set.000000 \
         --output RESULTS/band_error_epN \
@@ -14,7 +14,7 @@ Evaluate one checkpoint over the full available non-core DFT spectrum::
 
 Compare two checkpoints on the same structure::
 
-    python scripts/evaluate_band_error.py \
+    python evaluation/evaluate_band_error.py \
         --checkpoint RUN_A/checkpoint/nnsk.epN.pth \
         --checkpoint2 RUN_B/checkpoint/nnsk.epM.pth \
         --set DATA/set.000000 \
