@@ -1,18 +1,18 @@
 # DeePTB4hBN
 
-Utilities developed for the hBN defect-family DeePTB workflow, linking FHI-aims band-structure calculations to DeePTB dataset preparation, model evaluation, and band-edge diagnostics.
+Utilities developed for the hBN defect-family DeePTB workflow, linking FHI-aims band-structure calculations to DeePTB dataset preparation, model evaluation, and electronic-structure diagnostics.
 
 ## Repository status
 
 This repository currently consolidates the **PC demonstration-stage data conversion and evaluation pipeline**. The scripts here are sufficient to:
 
 1. convert individual or batched FHI-aims calculations into one-frame DeePTB datasets;
-2. compare DeePTB predictions with the supervised DFT targets;
-3. inspect the full available non-core spectrum for selected structures;
+2. compare DeePTB predictions with supervised or full available non-core DFT bands;
+3. compare FHI-aims and DeePTB band structures together with total/species-projected DOS;
 4. compare checkpoints band-by-band; and
-5. compare DFT-defined host-like VBM, CBM, and band-gap predictions between two model sources.
+5. compare DFT-defined host-like VBM, CBM, and band-gap predictions between model sources.
 
-They are **not yet sufficient by themselves to launch the scaled NSCC training stage**. The next repository update should add the canonical DeePTB training input/configuration used for the final PC baseline and the NSCC PBS submission script. Keeping those files separate from the analysis utilities will make the transition from the 50-epoch demo to longer, reproducible training runs explicit.
+They are **not yet sufficient by themselves to launch the scaled NSCC training stage**. The planned NSCC update should add the canonical training configuration and PBS submission scripts used for longer, reproducible runs.
 
 ## Workflow
 
@@ -22,7 +22,7 @@ FHI-aims calculations
         v
 aims_to_deeptb.py
         |
-        +-- batch_aims_to_deeptb.py   (many calculations)
+        +-- batch_aims_to_deeptb.py
         |
         v
 DeePTB set.* datasets
@@ -30,31 +30,33 @@ DeePTB set.* datasets
         v
 DeePTB training
         |
-        +-- evaluate_model.py         (batch supervised-target metrics)
-        +-- band_plot.py              (single-case DFT/model band overlay)
-        +-- evaluate_band_error.py    (single-case full-spectrum band errors)
-        +-- compare_frontiers.py      (VBM/CBM/gap comparison)
+        +-- evaluate_model.py
+        +-- band_plot.py
+        +-- band_dos_compare.py
+        +-- evaluate_band_error.py
+        +-- compare_frontiers.py
 ```
 
 ## Scripts
 
 | Script | Purpose | Typical scope |
 | --- | --- | --- |
-| `conversion/aims_to_deeptb.py` | Convert one FHI-aims calculation to DeePTB-SK format with explicit non-core band-selection policies | One calculation |
+| `conversion/aims_to_deeptb.py` | Convert one FHI-aims calculation to DeePTB-SK format with selectable non-core band policies | One calculation |
 | `conversion/batch_aims_to_deeptb.py` | Recursively convert many calculations into `set.XXXXXX` directories and write manifests | Dataset preparation |
-| `visualization/band_plot.py` | Overlay FHI-aims and DeePTB bands on the same k-path in supervised or full non-core mode | One structure/checkpoint |
-| `evaluation/evaluate_model.py` | Batch evaluation of a checkpoint against stored train/validation targets, including split-, quartile-, and band-resolved metrics | Many structures |
+| `visualization/band_plot.py` | Overlay FHI-aims and DeePTB bands in supervised or full non-core mode | One structure/checkpoint |
+| `visualization/band_dos_compare.py` | Plot FHI-aims ground truth, DeePTB prediction, or their comparison with adaptive total/species DOS panels | One structure/checkpoint |
+| `evaluation/evaluate_model.py` | Batch checkpoint evaluation against stored train/validation targets | Many structures |
 | `evaluation/evaluate_band_error.py` | Band-index-resolved error analysis, including unsupervised non-core bands and optional two-checkpoint comparison | One structure, one/two checkpoints |
-| `evaluation/compare_frontiers.py` | Compare two prediction sources using DFT-defined host-like VBM/CBM/gap targets | Many structures, two sources |
+| `evaluation/compare_frontiers.py` | Compare model sources using DFT-defined host-like VBM/CBM/gap targets | Many structures, two sources |
 
 ### `evaluate_model.py` vs `evaluate_band_error.py`
 
-These scripts are complementary rather than duplicates.
+These scripts are complementary:
 
-- `evaluate_model.py` is the **batch evaluator**. It scans train/validation `set.*` directories, evaluates one checkpoint, and aggregates errors across structures. Its DFT reference is the stored converted `eigenvalues.npy`, so it evaluates the supervised target window.
-- `evaluate_band_error.py` is the **single-structure spectral diagnostic**. In `--mode full`, it reloads the original FHI-aims bands, strips inferred core bands, and evaluates non-core bands above the training cutoff. It can also compare two checkpoints directly.
+- `evaluate_model.py` is the **batch evaluator**. It scans train/validation `set.*` directories and evaluates one checkpoint against the stored converted targets.
+- `evaluate_band_error.py` is the **single-structure spectral diagnostic**. In `--mode full`, it reloads the original FHI-aims bands and evaluates available non-core bands above the training cutoff. It can also compare two checkpoints directly.
 
-For scaled training, keep both: use `evaluate_model.py` for routine epoch/model selection and `evaluate_band_error.py` for detailed extrapolation checks on representative defects.
+For longer training, use `evaluate_model.py` for routine model selection and `evaluate_band_error.py` for detailed extrapolation checks on representative defects.
 
 ## Quick start
 
@@ -96,20 +98,12 @@ python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
     --band-policy adaptive-factor --band-factor 2.0
 ```
 
-Resume an interrupted conversion with the same selection policy:
+Resume with the same selection policy:
 
 ```bash
 python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
     --band-policy adaptive-factor --band-factor 2.0 \
     --resume
-```
-
-Override the default converter with another custom converter:
-
-```bash
-python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-    --converter conversion/custom_aims_to_deeptb.py \
-    --band-policy adaptive-factor --band-factor 2.0
 ```
 
 Each calculation is stored as one `set.XXXXXX` directory. `manifest.json` and `manifest.csv` record source paths, conversion status, composition, band-selection metadata, and failures.
@@ -124,8 +118,6 @@ python evaluation/evaluate_model.py \
     --output RESULTS/eval_epN \
     --make-plots
 ```
-
-This is the main evaluator for convergence studies and train/validation comparisons during longer training.
 
 ### 4. Plot a representative band structure
 
@@ -151,7 +143,52 @@ python visualization/band_plot.py \
 
 `--mode full` uses `source_case` in `conversion_report.json` unless `--aims-dir` is supplied.
 
-### 5. Inspect error versus band index
+### 5. Compare band structure and DOS
+
+Ground truth only:
+
+```bash
+python visualization/band_dos_compare.py \
+    --set DATA/set.000000 \
+    --output RESULTS/band_dos_dft \
+    --plot-content ground-truth \
+    --mode full \
+    --dos-mode all
+```
+
+DeePTB prediction only:
+
+```bash
+python visualization/band_dos_compare.py \
+    --checkpoint RUN/checkpoint/nnsk.epN.pth \
+    --set DATA/set.000000 \
+    --output RESULTS/band_dos_pred \
+    --plot-content prediction \
+    --mode full \
+    --dos-mode all \
+    --kmesh 30 30 1 \
+    --sigma 0.10
+```
+
+FHI-aims vs DeePTB:
+
+```bash
+python visualization/band_dos_compare.py \
+    --checkpoint RUN/checkpoint/nnsk.epN.pth \
+    --set DATA/set.000000 \
+    --output RESULTS/band_dos_compare \
+    --plot-content comparison \
+    --mode full \
+    --dos-mode all \
+    --kmesh 30 30 1 \
+    --sigma 0.10
+```
+
+`--dos-mode total` plots only total DOS; `--dos-mode all` adds one species-projected panel for every species present in the structure.
+
+The script prefers the ordinary FHI-aims `KS_DOS_total.dat` and `<species>_l_proj_dos.dat` files so the DOS and FHI-aims bands share the same energy reference. If the DOS calculation covers a narrower energy window than the plotted bands, the script prints a warning rather than treating missing DOS as an absence of states.
+
+### 6. Inspect error versus band index
 
 ```bash
 python evaluation/evaluate_band_error.py \
@@ -161,7 +198,7 @@ python evaluation/evaluate_band_error.py \
     --mode full
 ```
 
-Compare two checkpoints on exactly the same structure:
+Compare two checkpoints:
 
 ```bash
 python evaluation/evaluate_band_error.py \
@@ -172,7 +209,7 @@ python evaluation/evaluate_band_error.py \
     --mode full
 ```
 
-### 6. Compare host-like band edges between two model sources
+### 7. Compare host-like band edges
 
 ```bash
 python evaluation/compare_frontiers.py \
@@ -188,30 +225,29 @@ Each source can be a checkpoint, a training-output directory containing `nnsk.ep
 
 ## Assumptions and cautions
 
-The present workflow is specialized for the hBN defect dataset rather than being a general FHI-aims/DeePTB converter.
+The workflow is specialized for the hBN defect dataset rather than being a general FHI-aims/DeePTB interface.
 
 - Core-band inference is defined for H/B/C/N/O: H contributes zero inferred frozen 1s spatial core bands; B/C/N/O contribute one each.
-- The batch converter skips cases containing `band2*.out` by default. The evaluation scripts likewise avoid silently assuming how a second spin channel should be treated.
-- `band_plot.py` uses the hBN `M -> Gamma -> K -> M` high-symmetry path convention.
-- The converter preserves the original FHI-aims energy gauge. Evaluation scripts apply explicit energy-offset alignments where required by the DeePTB eigenvalue-loss convention.
-- `compare_frontiers.py` uses a **spectral heuristic** to identify host-like VBM/CBM bands in defect systems. Its default host-gap plausibility reference is 4.672 eV with a +/-0.5 eV tolerance; override these values when a different reference is appropriate. Localization-sensitive quantities such as IPR or projected character remain preferable for physically ambiguous defect states.
+- The converters/evaluators avoid silently combining `band2*.out` with the current single-channel workflow.
+- The visualization scripts use the hBN `M -> Gamma -> K -> M` high-symmetry path convention.
+- `band_dos_compare.py` keeps FHI-aims in its native band/DOS energy gauge and rigidly aligns DeePTB to it when `--align loss` is used.
+- FHI-aims DOS files cover only the energy window requested in the underlying DFT calculation; the script warns when this does not span the plotted band range.
+- `compare_frontiers.py` uses a spectral heuristic to identify host-like VBM/CBM bands in defect systems. Localization-sensitive quantities such as IPR or projected character remain preferable for ambiguous defect states.
 
 ## Python dependencies
-
-The scripts use:
 
 - Python 3
 - NumPy
 - ASE
 - PyTorch
-- Matplotlib (visualization/evaluation scripts)
+- Matplotlib
 - DeePTB and its runtime dependencies
 
 Use the same DeePTB environment for training and evaluation to avoid checkpoint/API incompatibilities.
 
 ## Next step: NSCC scaling
 
-Before starting the larger NSCC campaign, add the final PC-baseline training configuration and an NSCC launch layer, for example:
+Before the larger NSCC campaign, add the final PC-baseline training configuration and NSCC launch layer, for example:
 
 ```text
 input/
@@ -221,4 +257,4 @@ nscc/
     train_hbn_a100.pbs
 ```
 
-The NSCC job should preserve the dataset split and model definition used by the PC baseline, while making epochs, checkpoint frequency, resume behavior, run directory, and resource request explicit. That will let the first cluster run answer a clean question: **does the 50-epoch trend continue toward convergence when the same model is trained substantially longer?**
+The cluster runs should preserve the selected dataset split/model definition while making epochs, checkpoint frequency, resume behavior, output path, and resource request explicit.
