@@ -6,7 +6,7 @@ Usage
 -----
 Compare only the supervised training window::
 
-    python scripts/band_plot.py \
+    python visualization/band_plot.py \
         --checkpoint RUN/checkpoint/nnsk.epN.pth \
         --set DATA/set.000000 \
         --output RESULTS/band_plot \
@@ -14,7 +14,7 @@ Compare only the supervised training window::
 
 Compare all available non-core DFT bands::
 
-    python scripts/band_plot.py \
+    python visualization/band_plot.py \
         --checkpoint RUN/checkpoint/nnsk.epN.pth \
         --set DATA/set.000000 \
         --output RESULTS/band_plot_full \
