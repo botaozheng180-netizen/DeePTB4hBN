@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Plot FHI-aims and DeePTB band structures together with total and
 species-projected DOS for one converted hBN structure.
