@@ -93,7 +93,6 @@ conversion_report.json
 
 ```bash
 python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-    --converter conversion/aims_to_deeptb.py \
     --band-policy adaptive-factor --band-factor 2.0
 ```
 
@@ -101,9 +100,16 @@ Resume an interrupted conversion with the same selection policy:
 
 ```bash
 python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-    --converter conversion/aims_to_deeptb.py \
     --band-policy adaptive-factor --band-factor 2.0 \
     --resume
+```
+
+Override the default converter with another custom converter:
+
+```bash
+python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
+    --converter conversion/custom_aims_to_deeptb.py \
+    --band-policy adaptive-factor --band-factor 2.0
 ```
 
 Each calculation is stored as one `set.XXXXXX` directory. `manifest.json` and `manifest.csv` record source paths, conversion status, composition, band-selection metadata, and failures.
