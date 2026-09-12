@@ -6,7 +6,7 @@ Usage
 -----
 Compare two checkpoints or training-output directories::
 
-    python scripts/compare_frontiers.py \
+    python evaluation/compare_frontiers.py \
         --source-a RUN_A \
         --source-b RUN_B \
         --train DATA/train \
