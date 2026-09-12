@@ -6,7 +6,7 @@ Usage
 -----
 Evaluate both splits and generate summary plots::
 
-    python scripts/evaluate_model.py \
+    python evaluation/evaluate_model.py \
         --checkpoint RUN/checkpoint/nnsk.epN.pth \
         --train DATA/train \
         --val DATA/val \
