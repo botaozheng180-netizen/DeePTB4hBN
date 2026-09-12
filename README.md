@@ -40,12 +40,12 @@ DeePTB training
 
 | Script | Purpose | Typical scope |
 | --- | --- | --- |
-| `scripts/aims_to_deeptb.py` | Convert one FHI-aims calculation to DeePTB-SK format with explicit non-core band-selection policies | One calculation |
-| `scripts/batch_aims_to_deeptb.py` | Recursively convert many calculations into `set.XXXXXX` directories and write manifests | Dataset preparation |
-| `scripts/band_plot.py` | Overlay FHI-aims and DeePTB bands on the same k-path in supervised or full non-core mode | One structure/checkpoint |
-| `scripts/evaluate_model.py` | Batch evaluation of a checkpoint against stored train/validation targets, including split-, quartile-, and band-resolved metrics | Many structures |
-| `scripts/evaluate_band_error.py` | Band-index-resolved error analysis, including unsupervised non-core bands and optional two-checkpoint comparison | One structure, one/two checkpoints |
-| `scripts/compare_frontiers.py` | Compare two prediction sources using DFT-defined host-like VBM/CBM/gap targets | Many structures, two sources |
+| `conversion/aims_to_deeptb.py` | Convert one FHI-aims calculation to DeePTB-SK format with explicit non-core band-selection policies | One calculation |
+| `conversion/batch_aims_to_deeptb.py` | Recursively convert many calculations into `set.XXXXXX` directories and write manifests | Dataset preparation |
+| `visualization/band_plot.py` | Overlay FHI-aims and DeePTB bands on the same k-path in supervised or full non-core mode | One structure/checkpoint |
+| `evaluation/evaluate_model.py` | Batch evaluation of a checkpoint against stored train/validation targets, including split-, quartile-, and band-resolved metrics | Many structures |
+| `evaluation/evaluate_band_error.py` | Band-index-resolved error analysis, including unsupervised non-core bands and optional two-checkpoint comparison | One structure, one/two checkpoints |
+| `evaluation/compare_frontiers.py` | Compare two prediction sources using DFT-defined host-like VBM/CBM/gap targets | Many structures, two sources |
 
 ### `evaluate_model.py` vs `evaluate_band_error.py`
 
@@ -63,7 +63,7 @@ For scaled training, keep both: use `evaluate_model.py` for routine epoch/model 
 Recommended adaptive non-core window:
 
 ```bash
-python scripts/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
+python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
     --band-policy adaptive-factor --band-factor 2.0
 ```
 
@@ -71,11 +71,11 @@ Alternative policies:
 
 ```bash
 # Keep all available non-core bands
-python scripts/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
+python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
     --band-policy all-noncore
 
 # Keep exactly N non-core bands
-python scripts/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
+python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
     --band-policy fixed-noncore --noncore-bands N
 ```
 
@@ -92,16 +92,16 @@ conversion_report.json
 ### 2. Convert a calculation tree
 
 ```bash
-python scripts/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-    --converter scripts/aims_to_deeptb.py \
+python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
+    --converter conversion/aims_to_deeptb.py \
     --band-policy adaptive-factor --band-factor 2.0
 ```
 
 Resume an interrupted conversion with the same selection policy:
 
 ```bash
-python scripts/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-    --converter scripts/aims_to_deeptb.py \
+python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
+    --converter conversion/aims_to_deeptb.py \
     --band-policy adaptive-factor --band-factor 2.0 \
     --resume
 ```
@@ -111,7 +111,7 @@ Each calculation is stored as one `set.XXXXXX` directory. `manifest.json` and `m
 ### 3. Batch-evaluate a checkpoint
 
 ```bash
-python scripts/evaluate_model.py \
+python evaluation/evaluate_model.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
     --train DATA/train \
     --val DATA/val \
@@ -126,7 +126,7 @@ This is the main evaluator for convergence studies and train/validation comparis
 Supervised target only:
 
 ```bash
-python scripts/band_plot.py \
+python visualization/band_plot.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
     --set DATA/set.000000 \
     --output RESULTS/band_plot \
@@ -136,7 +136,7 @@ python scripts/band_plot.py \
 Full available non-core spectrum:
 
 ```bash
-python scripts/band_plot.py \
+python visualization/band_plot.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
     --set DATA/set.000000 \
     --output RESULTS/band_plot_full \
@@ -148,7 +148,7 @@ python scripts/band_plot.py \
 ### 5. Inspect error versus band index
 
 ```bash
-python scripts/evaluate_band_error.py \
+python evaluation/evaluate_band_error.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
     --set DATA/set.000000 \
     --output RESULTS/band_error_epN \
@@ -158,7 +158,7 @@ python scripts/evaluate_band_error.py \
 Compare two checkpoints on exactly the same structure:
 
 ```bash
-python scripts/evaluate_band_error.py \
+python evaluation/evaluate_band_error.py \
     --checkpoint RUN_A/checkpoint/nnsk.epN.pth \
     --checkpoint2 RUN_B/checkpoint/nnsk.epM.pth \
     --set DATA/set.000000 \
@@ -169,7 +169,7 @@ python scripts/evaluate_band_error.py \
 ### 6. Compare host-like band edges between two model sources
 
 ```bash
-python scripts/compare_frontiers.py \
+python evaluation/compare_frontiers.py \
     --source-a RUN_A \
     --source-b RUN_B \
     --train DATA/train \
@@ -198,7 +198,7 @@ The scripts use:
 - NumPy
 - ASE
 - PyTorch
-- Matplotlib (plotting/evaluation scripts)
+- Matplotlib (visualization/evaluation scripts)
 - DeePTB and its runtime dependencies
 
 Use the same DeePTB environment for training and evaluation to avoid checkpoint/API incompatibilities.
