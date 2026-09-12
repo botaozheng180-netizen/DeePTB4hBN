@@ -6,15 +6,19 @@ Usage
 -----
 Recommended adaptive conversion::
 
-    python scripts/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-        --converter scripts/aims_to_deeptb.py \
+    python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
         --band-policy adaptive-factor --band-factor 2.0
 
 Resume an interrupted conversion without re-running completed sets::
 
-    python scripts/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-        --converter scripts/aims_to_deeptb.py \
+    python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
         --band-policy adaptive-factor --band-factor 2.0 --resume
+
+Override the default converter with another custom converter::
+
+    python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
+        --converter conversion/aims_to_deeptb.py \
+        --band-policy adaptive-factor --band-factor 2.0
 
 Output layout
 -------------
@@ -115,7 +119,7 @@ def build_parser():
     p.add_argument(
         "--converter",
         type=Path,
-        default=Path("./aims_to_deeptb.py"),
+        default=Path(__file__).resolve().with_name("aims_to_deeptb.py"),
         help="Path to aims_to_deeptb.py",
     )
     p.add_argument("--geometry", default="geometry.in")
