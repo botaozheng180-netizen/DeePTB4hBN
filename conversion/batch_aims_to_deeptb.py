@@ -17,7 +17,7 @@ Resume an interrupted conversion without re-running completed sets::
 Override the default converter with another custom converter::
 
     python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-        --converter conversion/aims_to_deeptb.py \
+        --converter conversion/custom_aims_to_deeptb.py \
         --band-policy adaptive-factor --band-factor 2.0
 
 Output layout
