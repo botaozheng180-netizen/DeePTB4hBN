@@ -5,17 +5,17 @@ Usage
 -----
 Recommended adaptive non-core window::
 
-    python scripts/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
+    python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
         --band-policy adaptive-factor --band-factor 2.0
 
 Keep all available non-core bands::
 
-    python scripts/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
+    python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
         --band-policy all-noncore
 
 Keep a fixed number of non-core bands::
 
-    python scripts/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
+    python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
         --band-policy fixed-noncore --noncore-bands N
 
 Input
