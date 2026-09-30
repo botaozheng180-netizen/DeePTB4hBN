@@ -1,18 +1,6 @@
 # DeePTB4hBN
 
-Utilities developed for the hBN defect-family DeePTB workflow, linking FHI-aims band-structure calculations to DeePTB dataset preparation, model evaluation, and electronic-structure diagnostics.
-
-## Repository status
-
-This repository currently consolidates the **PC demonstration-stage data conversion and evaluation pipeline**. The scripts here are sufficient to:
-
-1. convert individual or batched FHI-aims calculations into one-frame DeePTB datasets;
-2. compare DeePTB predictions with supervised or full available non-core DFT bands;
-3. compare FHI-aims and DeePTB band structures together with total/species-projected DOS;
-4. compare checkpoints band-by-band; and
-5. compare DFT-defined host-like VBM, CBM, and band-gap predictions between model sources.
-
-They are **not yet sufficient by themselves to launch the scaled NSCC training stage**. The planned NSCC update should add the canonical training configuration and PBS submission scripts used for longer, reproducible runs.
+Utilities developed for the hBN defect-family DeePTB workflow, linking FHI-aims band-structure calculations to DeePTB dataset preparation, optional energy-region weighting, model evaluation, and electronic-structure diagnostics.
 
 ## Workflow
 
@@ -20,22 +8,32 @@ They are **not yet sufficient by themselves to launch the scaled NSCC training s
 FHI-aims calculations
         |
         v
-aims_to_deeptb.py
+conversion/aims_to_deeptb.py
         |
-        +-- batch_aims_to_deeptb.py
+        +-- conversion/batch_aims_to_deeptb.py
         |
         v
 DeePTB set.* datasets
         |
+        +-- preprocessing/weight_band_regions.py      optional
+        |       |
+        |       +-- info.unweighted.json
+        |       +-- info.weighted.json
+        |       +-- band_regions.json
+        |       v
+        |   visualization/visualize_band_regions.py
+        |
         v
 DeePTB training
         |
-        +-- evaluate_model.py
-        +-- band_plot.py
-        +-- band_dos_compare.py
-        +-- evaluate_band_error.py
-        +-- compare_frontiers.py
+        +-- evaluation/evaluate_model.py
+        +-- evaluation/evaluate_band_error.py
+        +-- evaluation/compare_frontiers.py
+        +-- visualization/band_plot.py
+        +-- visualization/band_dos_compare.py
 ```
+
+The converted eigenvalue targets remain unchanged when band-region weighting is enabled. Weighting is introduced only through DeePTB's existing `bandinfo.emin` / `bandinfo.emax` metadata and the training-time `eout_weight` setting.
 
 ## Scripts
 
@@ -43,20 +41,13 @@ DeePTB training
 | --- | --- | --- |
 | `conversion/aims_to_deeptb.py` | Convert one FHI-aims calculation to DeePTB-SK format with selectable non-core band policies | One calculation |
 | `conversion/batch_aims_to_deeptb.py` | Recursively convert many calculations into `set.XXXXXX` directories and write manifests | Dataset preparation |
+| `preprocessing/weight_band_regions.py` | Detect the lower-spectrum / upper-spectrum separation, generate reversible weighted metadata, and switch between weighted and unweighted `info.json` states | One set or a dataset tree |
+| `visualization/visualize_band_regions.py` | Batch QA of detected weighting regions using selected converted bands or the full available non-core FHI-aims spectrum | One set or a dataset tree |
 | `visualization/band_plot.py` | Overlay FHI-aims and DeePTB bands in supervised or full non-core mode | One structure/checkpoint |
-| `visualization/band_dos_compare.py` | Plot FHI-aims ground truth, DeePTB prediction, or their comparison with adaptive total/species DOS panels | One structure/checkpoint |
+| `visualization/band_dos_compare.py` | Plot FHI-aims ground truth, DeePTB prediction, or their comparison with total/species-projected DOS | One structure/checkpoint |
 | `evaluation/evaluate_model.py` | Batch checkpoint evaluation against stored train/validation targets | Many structures |
 | `evaluation/evaluate_band_error.py` | Band-index-resolved error analysis, including unsupervised non-core bands and optional two-checkpoint comparison | One structure, one/two checkpoints |
 | `evaluation/compare_frontiers.py` | Compare model sources using DFT-defined host-like VBM/CBM/gap targets | Many structures, two sources |
-
-### `evaluate_model.py` vs `evaluate_band_error.py`
-
-These scripts are complementary:
-
-- `evaluate_model.py` is the **batch evaluator**. It scans train/validation `set.*` directories and evaluates one checkpoint against the stored converted targets.
-- `evaluate_band_error.py` is the **single-structure spectral diagnostic**. In `--mode full`, it reloads the original FHI-aims bands and evaluates available non-core bands above the training cutoff. It can also compare two checkpoints directly.
-
-For longer training, use `evaluate_model.py` for routine model selection and `evaluate_band_error.py` for detailed extrapolation checks on representative defects.
 
 ## Quick start
 
@@ -108,7 +99,147 @@ python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
 
 Each calculation is stored as one `set.XXXXXX` directory. `manifest.json` and `manifest.csv` record source paths, conversion status, composition, band-selection metadata, and failures.
 
-### 3. Batch-evaluate a checkpoint
+## Optional energy-region weighting
+
+The current hBN workflow can down-weight the deep lower-spectrum manifold while retaining the complete converted target and the same `2s + 2p + d*` DeePTB basis.
+
+The detector first searches for a sufficiently large internal empty gap. If none is found, it falls back to a low-density corridor identified from the retained band spectrum. The selected split is converted to DeePTB's minimum-aligned energy gauge and written as `bandinfo.emin`; `bandinfo.emax` is placed above the highest selected target energy.
+
+### Inspect without modifying files
+
+```bash
+python preprocessing/weight_band_regions.py DATA --recursive
+```
+
+### Generate and activate weighted metadata
+
+```bash
+python preprocessing/weight_band_regions.py DATA --recursive --apply
+```
+
+For each `set.XXXXXX`, the script keeps:
+
+```text
+info.json                 # active metadata read by DeePTB
+info.unweighted.json      # preserved equal-weight baseline
+info.weighted.json        # generated weighted configuration
+band_regions.json         # detector parameters, split information, checks, hashes
+```
+
+Only the DeePTB-required energy-window fields are added to `info.weighted.json`. Detector diagnostics and provenance are stored separately in `band_regions.json`.
+
+The default detector parameters are:
+
+```text
+min gap                  5.0 eV
+minimum split offset     5.0 eV above E0
+maximum search offset   15.0 eV above E0
+grid step                0.05 eV
+minimum sparse width     1.0 eV
+sparse crossing limit    min(4, max(2, ceil(0.02 * Nbands)))
+emax margin              1.0 eV
+```
+
+The script performs consistency checks before activation, including
+
+```text
+split_offset == split_energy - E0
+emin         == split_offset
+emax         >  highest aligned selected-band energy
+emax         >  emin > 0
+```
+
+and verifies active/canonical metadata switches using SHA-256 hashes.
+
+### Switch back to equal weighting
+
+```bash
+python preprocessing/weight_band_regions.py DATA --recursive --undo
+```
+
+Reactivate an already-generated weighted configuration without rerunning the detector:
+
+```bash
+python preprocessing/weight_band_regions.py DATA --recursive --activate-weighted
+```
+
+Inspect the active metadata state:
+
+```bash
+python preprocessing/weight_band_regions.py DATA --recursive --status
+```
+
+If the active `info.json` matches neither canonical copy, the script reports an `unknown` state and refuses to overwrite it unless `--force-switch` is explicitly supplied.
+
+### Configure the DeePTB loss
+
+The detector records a recommended weight for provenance, but `eout_weight` remains a training hyperparameter and must be set in the DeePTB input file:
+
+```json
+"loss_options": {
+  "train": {
+    "method": "eigvals",
+    "eout_weight": 0.5
+  }
+}
+```
+
+With an energy window present, the current DeePTB eigenvalue loss behaves as
+
+```text
+loss = MSE(in-window states) + eout_weight * MSE(out-of-window states)
+```
+
+The eigenvalue arrays themselves are not rewritten or truncated.
+
+## Band-region visual QA
+
+Before using weighted metadata for training, inspect the detected separation in batches.
+
+### Selected converted target
+
+```bash
+python visualization/visualize_band_regions.py DATA --mode selected
+```
+
+This plots exactly the retained `eigenvalues.npy` spectrum used by the detector.
+
+### Full available non-core FHI-aims spectrum
+
+```bash
+python visualization/visualize_band_regions.py DATA --mode full
+```
+
+Full mode reloads `band1*.out`, strips the inferred 1s core bands, and verifies that the converted target is the expected prefix of the reconstructed non-core spectrum.
+
+By default the visualizer reads the canonical `info.weighted.json`. To inspect the metadata currently active in DeePTB:
+
+```bash
+python visualization/visualize_band_regions.py DATA \
+    --mode selected \
+    --window-source active
+```
+
+The plots use:
+
+- black lines for FHI-aims bands;
+- light orange shading for the detected low-density candidate region;
+- dashed red lines for `emin` and `emax`;
+- per-panel annotations for the split, offset, region width, confidence, and active metadata state.
+
+Use gray shading instead:
+
+```bash
+python visualization/visualize_band_regions.py DATA \
+    --mode selected \
+    --shade-color gray
+```
+
+Batch runs write individual PNGs, a CSV summary, and 4x4 contact sheets by default.
+
+## Model evaluation
+
+### Batch-evaluate a checkpoint
 
 ```bash
 python evaluation/evaluate_model.py \
@@ -119,7 +250,7 @@ python evaluation/evaluate_model.py \
     --make-plots
 ```
 
-### 4. Plot a representative band structure
+### Plot a representative band structure
 
 Supervised target only:
 
@@ -143,7 +274,7 @@ python visualization/band_plot.py \
 
 `--mode full` uses `source_case` in `conversion_report.json` unless `--aims-dir` is supplied.
 
-### 5. Compare band structure and DOS
+### Compare band structure and DOS
 
 Ground truth only:
 
@@ -186,9 +317,9 @@ python visualization/band_dos_compare.py \
 
 `--dos-mode total` plots only total DOS; `--dos-mode all` adds one species-projected panel for every species present in the structure.
 
-The script prefers the ordinary FHI-aims `KS_DOS_total.dat` and `<species>_l_proj_dos.dat` files so the DOS and FHI-aims bands share the same energy reference. If the DOS calculation covers a narrower energy window than the plotted bands, the script prints a warning rather than treating missing DOS as an absence of states.
+The script prefers the ordinary FHI-aims `KS_DOS_total.dat` and `<species>_l_proj_dos.dat` files so the DOS and FHI-aims bands share the same energy reference. If the DOS calculation covers a narrower energy window than the plotted bands, the script warns rather than treating missing DOS as an absence of states.
 
-### 6. Inspect error versus band index
+### Inspect error versus band index
 
 ```bash
 python evaluation/evaluate_band_error.py \
@@ -209,7 +340,7 @@ python evaluation/evaluate_band_error.py \
     --mode full
 ```
 
-### 7. Compare host-like band edges
+### Compare host-like band edges
 
 ```bash
 python evaluation/compare_frontiers.py \
@@ -228,10 +359,13 @@ Each source can be a checkpoint, a training-output directory containing `nnsk.ep
 The workflow is specialized for the hBN defect dataset rather than being a general FHI-aims/DeePTB interface.
 
 - Core-band inference is defined for H/B/C/N/O: H contributes zero inferred frozen 1s spatial core bands; B/C/N/O contribute one each.
-- The converters/evaluators avoid silently combining `band2*.out` with the current single-channel workflow.
+- The converters and evaluators avoid silently combining `band2*.out` with the current single-channel workflow.
 - The visualization scripts use the hBN `M -> Gamma -> K -> M` high-symmetry path convention.
+- `weight_band_regions.py` detects a spectral separation, not a chemically exact 2s projector. The low-density region is a detection aid; the selected `emin` is the actual weighting boundary.
+- Weighted and unweighted validation losses are not directly comparable when different `eout_weight` settings are used. Preserve an unweighted evaluation route when comparing training strategies.
 - `band_dos_compare.py` keeps FHI-aims in its native band/DOS energy gauge and rigidly aligns DeePTB to it when `--align loss` is used.
-- FHI-aims DOS files cover only the energy window requested in the underlying DFT calculation; the script warns when this does not span the plotted band range.
+- FHI-aims DOS files cover only the requested DFT energy range; missing DOS outside that range does not imply zero states.
+- FHI-aims and DeePTB projected DOS use different basis/projection conventions and should be compared qualitatively rather than as exact orbital populations.
 - `compare_frontiers.py` uses a spectral heuristic to identify host-like VBM/CBM bands in defect systems. Localization-sensitive quantities such as IPR or projected character remain preferable for ambiguous defect states.
 
 ## Python dependencies
@@ -245,16 +379,33 @@ The workflow is specialized for the hBN defect dataset rather than being a gener
 
 Use the same DeePTB environment for training and evaluation to avoid checkpoint/API incompatibilities.
 
-## Next step: NSCC scaling
+## NSCC workflow
 
-Before the larger NSCC campaign, add the final PC-baseline training configuration and NSCC launch layer, for example:
+For controlled NSCC comparisons, keep the converted target dataset fixed and separate training outputs by experiment, for example:
 
 ```text
-input/
-    hbn_nnsk_baseline.json
-
-nscc/
-    train_hbn_a100.pbs
+results/
+    baseline_2x_equal/
+    weighted_2x_w050/
 ```
 
-The cluster runs should preserve the selected dataset split/model definition while making epochs, checkpoint frequency, resume behavior, output path, and resource request explicit.
+A typical sequence is:
+
+```bash
+# Check metadata state
+python preprocessing/weight_band_regions.py DATA --recursive --status
+
+# Activate equal-weight baseline
+python preprocessing/weight_band_regions.py DATA --recursive --undo
+
+# Run baseline training
+# ... DeePTB / NSCC launch command ...
+
+# Activate previously generated weighted metadata
+python preprocessing/weight_band_regions.py DATA --recursive --activate-weighted
+
+# Run weighted training with eout_weight = 0.5
+# ... DeePTB / NSCC launch command ...
+```
+
+The dataset eigenvalues are identical between the two runs; only the active `info.json` energy-window metadata and the training loss configuration differ.
