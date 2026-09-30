@@ -15,6 +15,11 @@ conversion/aims_to_deeptb.py
         v
 DeePTB set.* datasets
         |
+        +-- preprocessing/split_train_val.py
+        |       |
+        |       +-- train/set.*
+        |       +-- val/set.*
+        |
         +-- preprocessing/weight_band_regions.py      optional
         |       |
         |       +-- info.unweighted.json
@@ -41,6 +46,7 @@ The converted eigenvalue targets remain unchanged when band-region weighting is 
 | --- | --- | --- |
 | `conversion/aims_to_deeptb.py` | Convert one FHI-aims calculation to DeePTB-SK format with selectable non-core band policies | One calculation |
 | `conversion/batch_aims_to_deeptb.py` | Recursively convert many calculations into `set.XXXXXX` directories and write manifests | Dataset preparation |
+| `preprocessing/split_train_val.py` | Create reproducible train/validation trees by explicit set list or seeded random split, with copy or symlink materialization | Dataset preparation |
 | `preprocessing/weight_band_regions.py` | Detect the lower-spectrum / upper-spectrum separation, generate reversible weighted metadata, and switch between weighted and unweighted `info.json` states | One set or a dataset tree |
 | `visualization/visualize_band_regions.py` | Batch QA of detected weighting regions using selected converted bands or the full available non-core FHI-aims spectrum | One set or a dataset tree |
 | `visualization/band_plot.py` | Overlay FHI-aims and DeePTB bands in supervised or full non-core mode | One structure/checkpoint |
@@ -99,6 +105,61 @@ python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
 
 Each calculation is stored as one `set.XXXXXX` directory. `manifest.json` and `manifest.csv` record source paths, conversion status, composition, band-selection metadata, and failures.
 
+### 3. Split converted data into train/validation sets
+
+Create a reproducible 80/20 split:
+
+```bash
+python preprocessing/split_train_val.py CONVERTED_DATA SPLIT_DATA \
+    --val-fraction 0.2 --seed 42
+```
+
+For a fixed validation set, specify the set IDs directly:
+
+```bash
+python preprocessing/split_train_val.py CONVERTED_DATA SPLIT_DATA \
+    --val-sets \
+    set.000007 set.000013 set.000017 set.000023 set.000027 \
+    set.000030 set.000037 set.000040 set.000044 set.000048
+```
+
+A text file can also be used:
+
+```bash
+python preprocessing/split_train_val.py CONVERTED_DATA SPLIT_DATA \
+    --val-list validation_sets.txt
+```
+
+Inspect a proposed split without writing files:
+
+```bash
+python preprocessing/split_train_val.py CONVERTED_DATA SPLIT_DATA \
+    --val-fraction 0.2 --seed 42 --dry-run
+```
+
+The default materialization mode is `copy`, which is the most portable choice for NSCC. To avoid duplicating data when the source and split trees will remain together:
+
+```bash
+python preprocessing/split_train_val.py CONVERTED_DATA SPLIT_DATA \
+    --val-fraction 0.2 --seed 42 --mode symlink
+```
+
+The source dataset is never modified. The output layout is:
+
+```text
+SPLIT_DATA/
+    train/
+        set.XXXXXX/
+    val/
+        set.XXXXXX/
+    split_manifest.json
+    split_manifest.csv
+```
+
+The manifest records the exact train/validation membership, selection method, random seed when applicable, and materialization mode. Existing `train/` or `val/` directories are not replaced unless `--overwrite` is supplied.
+
+Use a sibling output directory by default. Nested output is blocked unless `--allow-nested-output` is explicitly supplied, because recursive preprocessing tools could otherwise encounter duplicate `set.*` directories.
+
 ## Optional energy-region weighting
 
 The current hBN workflow can down-weight the deep lower-spectrum manifold while retaining the complete converted target and the same `2s + 2p + d*` DeePTB basis.
@@ -154,19 +215,19 @@ and verifies active/canonical metadata switches using SHA-256 hashes.
 ### Switch back to equal weighting
 
 ```bash
-python preprocessing/weight_band_regions.py DATA --recursive --undo
+python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --undo
 ```
 
 Reactivate an already-generated weighted configuration without rerunning the detector:
 
 ```bash
-python preprocessing/weight_band_regions.py DATA --recursive --activate-weighted
+python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --activate-weighted
 ```
 
 Inspect the active metadata state:
 
 ```bash
-python preprocessing/weight_band_regions.py DATA --recursive --status
+python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --status
 ```
 
 If the active `info.json` matches neither canonical copy, the script reports an `unknown` state and refuses to overwrite it unless `--force-switch` is explicitly supplied.
@@ -381,7 +442,7 @@ Use the same DeePTB environment for training and evaluation to avoid checkpoint/
 
 ## NSCC workflow
 
-For controlled NSCC comparisons, keep the converted target dataset fixed and separate training outputs by experiment, for example:
+For controlled NSCC comparisons, first freeze the train/validation membership with `split_train_val.py`, then keep those converted targets fixed and separate training outputs by experiment, for example:
 
 ```text
 results/
@@ -392,17 +453,21 @@ results/
 A typical sequence is:
 
 ```bash
+# Create or reproduce the train/validation split once
+python preprocessing/split_train_val.py CONVERTED_DATA SPLIT_DATA \
+    --val-list validation_sets.txt
+
 # Check metadata state
-python preprocessing/weight_band_regions.py DATA --recursive --status
+python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --status
 
 # Activate equal-weight baseline
-python preprocessing/weight_band_regions.py DATA --recursive --undo
+python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --undo
 
 # Run baseline training
 # ... DeePTB / NSCC launch command ...
 
 # Activate previously generated weighted metadata
-python preprocessing/weight_band_regions.py DATA --recursive --activate-weighted
+python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --activate-weighted
 
 # Run weighted training with eout_weight = 0.5
 # ... DeePTB / NSCC launch command ...
