@@ -36,6 +36,7 @@ DeePTB training
         +-- evaluation/compare_frontiers.py
         +-- visualization/band_plot.py
         +-- visualization/band_dos_compare.py
+        +-- visualization/batch_visualize_run.py
 ```
 
 The converted eigenvalue targets remain unchanged when band-region weighting is enabled. Weighting is introduced only through DeePTB's existing `bandinfo.emin` / `bandinfo.emax` metadata and the training-time `eout_weight` setting.
@@ -51,6 +52,7 @@ The converted eigenvalue targets remain unchanged when band-region weighting is 
 | `visualization/visualize_band_regions.py` | Batch QA of detected weighting regions using selected converted bands or the full available non-core FHI-aims spectrum | One set or a dataset tree |
 | `visualization/band_plot.py` | Overlay FHI-aims and DeePTB bands in supervised or full non-core mode | One structure/checkpoint |
 | `visualization/band_dos_compare.py` | Plot FHI-aims ground truth, DeePTB prediction, or their comparison with total/species-projected DOS | One structure/checkpoint |
+| `visualization/batch_visualize_run.py` | Batch-run the canonical band and/or band+DOS visualizers while importing heavy modules and loading the checkpoint only once | Train/validation run |
 | `evaluation/evaluate_model.py` | Batch checkpoint evaluation against stored train/validation targets | Many structures |
 | `evaluation/evaluate_band_error.py` | Band-index-resolved error analysis, including unsupervised non-core bands and optional two-checkpoint comparison | One structure, one/two checkpoints |
 | `evaluation/compare_frontiers.py` | Compare model sources using DFT-defined host-like VBM/CBM/gap targets | Many structures, two sources |
@@ -380,6 +382,59 @@ python visualization/band_dos_compare.py \
 
 The script prefers the ordinary FHI-aims `KS_DOS_total.dat` and `<species>_l_proj_dos.dat` files so the DOS and FHI-aims bands share the same energy reference. If the DOS calculation covers a narrower energy window than the plotted bands, the script warns rather than treating missing DOS as an absence of states.
 
+### Batch-visualize a training run
+
+The batch visualizer reads the DeePTB run input, resolves its train/validation dataset roots, auto-detects the checkpoint, and calls the canonical single-case plotting scripts in one Python process. PyTorch/DeePTB are imported once and the checkpoint is loaded once, which avoids repeated startup overhead on NSCC.
+
+Band plots for all train + validation structures:
+
+```bash
+python visualization/batch_visualize_run.py \
+    --run-dir RUN \
+    --backend band \
+    --mode full
+```
+
+Band + DOS plots:
+
+```bash
+python visualization/batch_visualize_run.py \
+    --run-dir RUN \
+    --backend both \
+    --mode full
+```
+
+Test one validation case first:
+
+```bash
+python visualization/batch_visualize_run.py \
+    --run-dir RUN \
+    --backend band \
+    --mode full \
+    --splits val \
+    --limit 1
+```
+
+Use `--checkpoint` or `--input-json` to override auto-detection. The DOS backend also accepts `--dos-mode`, `--kmesh`, `--sigma`, and `--plot-content`.
+
+The default output is:
+
+```text
+RUN/visualization/
+    band/
+        train/
+        val/
+    dos/
+        train/
+        val/
+    flat_png/
+    batch_visualization_summary.csv
+    batch_visualization_failures.csv
+    batch_visualization_manifest.json
+```
+
+`flat_png/` collects copies of generated PNGs with split/set/backend prefixes for quick browsing. Scientific plotting logic remains in `band_plot.py` and `band_dos_compare.py`; the batch script only resolves the run and orchestrates repeated calls.
+
 ### Inspect error versus band index
 
 ```bash
@@ -474,3 +529,15 @@ python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --activate-we
 ```
 
 The dataset eigenvalues are identical between the two runs; only the active `info.json` energy-window metadata and the training loss configuration differ.
+
+
+After training, batch visualization can be launched directly from the run metadata:
+
+```bash
+python visualization/batch_visualize_run.py \
+    --run-dir runs/4by4_52d_200ep \
+    --backend band \
+    --mode full
+```
+
+Use `--backend both` when the band+DOS diagnostics are also required.
