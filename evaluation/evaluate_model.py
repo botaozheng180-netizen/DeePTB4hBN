@@ -1,4 +1,11 @@
 """
+Select stored mesh or path targets (repository-root commands):
+    python evaluation/evaluate_model.py --checkpoint MODEL.pth --train MESH_SPLIT/train --val MESH_SPLIT/val --sampling mesh --output RESULTS/mesh_eval --make-plots
+    python evaluation/evaluate_model.py --checkpoint MODEL.pth --train PATH_SPLIT/train --val PATH_SPLIT/val --sampling path --output RESULTS/path_eval --make-plots
+Default --sampling all selects both. Predictions use the actual stored coordinates;
+mesh xlist is a file-order index. Metrics are equally weighted over stored points,
+not Brillouin-zone quadrature. Requires a working DeePTB checkpoint environment.
+
 Batch-evaluate one DeePTB checkpoint against converted train and/or validation
 sets for the hBN-defect workflow.
 
@@ -44,10 +51,14 @@ import json
 import math
 import re
 import shutil
-import sys
 import traceback
 from collections import defaultdict
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import add_sampling_filter, filter_cases, dataset_sampling
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -388,8 +399,7 @@ def evaluate_one_case(
             f"{set_dir}: DFT nk={dft.shape[0]} does not match kpoints nk={kpoints.shape[0]}"
         )
 
-    report_path = set_dir / "conversion_report.json"
-    sampling = json.loads(report_path.read_text()).get("kpoint_sampling", "path") if report_path.exists() else "path"
+    sampling = dataset_sampling(set_dir)
     xlist = (np.arange(len(kpoints), dtype=float) if sampling == "mesh"
              else calculate_xlist(structure_path, kpoints))
 
@@ -488,6 +498,7 @@ def evaluate_one_case(
 
     case_row: Dict[str, Any] = {
         "split": split,
+        "kpoint_sampling": sampling,
         "set_id": set_dir.name,
         "set_dir": str(set_dir),
         "source_case": source["source_case"],
@@ -705,6 +716,7 @@ def main():
                         help="Allow replacing an existing non-empty output directory.")
     parser.add_argument("--keep-going", action="store_true", default=True,
                         help="Continue after individual case failures (default behavior).")
+    add_sampling_filter(parser)
     args = parser.parse_args()
 
     if args.train is None and args.val is None:
@@ -716,17 +728,17 @@ def main():
     if not args.checkpoint.is_file():
         parser.error(f"Checkpoint not found: {args.checkpoint}")
 
-    prepare_output_dir(args.output, args.overwrite)
-
     roots: List[Tuple[str, Path]] = []
     if args.train is not None:
         roots.append(("train", args.train))
     if args.val is not None:
         roots.append(("val", args.val))
 
-    cases = discover_cases(roots, args.case_glob)
+    cases = filter_cases(discover_cases(roots, args.case_glob), args.sampling)
     if not cases:
         raise RuntimeError("No set.* directories found.")
+
+    prepare_output_dir(args.output, args.overwrite)
 
     print("=" * 72)
     print("hBN DeePTB batch evaluation")
@@ -785,7 +797,7 @@ def main():
         )
 
     case_fields = [
-        "split", "set_id", "set_dir",
+        "split", "set_id", "set_dir", "kpoint_sampling",
         "source_case", "source_relative", "case_name",
         "natoms", "B", "C", "N", "O",
         "cb", "cn", "ob", "on", "vb", "vn",

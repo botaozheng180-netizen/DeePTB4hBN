@@ -1,6 +1,6 @@
 # DeePTB4hBN
 
-Utilities developed for the hBN defect-family DeePTB workflow, linking FHI-aims band-structure calculations to DeePTB dataset preparation, optional energy-region weighting, model evaluation, and electronic-structure diagnostics.
+Utilities developed for the hBN defect-family DeePTB workflow, linking FHI-aims dense-grid and band-path calculations to DeePTB dataset preparation, optional energy-region weighting, model evaluation, and electronic-structure diagnostics.
 
 ## Workflow
 
@@ -57,169 +57,240 @@ The converted eigenvalue targets remain unchanged when band-region weighting is 
 | `evaluation/evaluate_band_error.py` | Band-index-resolved error analysis, including unsupervised non-core bands and optional two-checkpoint comparison | One structure, one/two checkpoints |
 | `evaluation/compare_frontiers.py` | Compare model sources using DFT-defined host-like VBM/CBM/gap targets | Many structures, two sources |
 
-## Quick start
+## Quick start: choose mesh or path
 
-### 1. Convert one FHI-aims calculation
+Run commands from the repository root. Uppercase names such as `AIMS_ROOT`,
+`MESH_DATA` and `MODEL.pth` are placeholders: replace them with your paths.
+Use a different output root for each sampling type. The source tree may contain
+both types of output; the selected source is the only one read.
 
-Recommended adaptive non-core window:
-
-```bash
-python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
-    --band-policy adaptive-factor --band-factor 2.0
-```
-
-Alternative policies:
+Install the conversion, preprocessing and QA dependencies:
 
 ```bash
-# Keep all available non-core bands
-python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
-    --band-policy all-noncore
-
-# Keep exactly N non-core bands
-python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
-    --band-policy fixed-noncore --noncore-bands N
+python -m pip install numpy ase matplotlib
 ```
 
-The converter writes:
+Checkpoint evaluation and band/DOS prediction require your existing working
+DeePTB/PyTorch environment and a trained checkpoint. This repository provides
+dataset and diagnostic scripts; it does not include a training configuration or
+checkpoint. `band_dos_compare.py` also imports DeePTB in ground-truth mode.
 
-```text
-xdat.traj
-kpoints.npy
-eigenvalues.npy
-info.json
-conversion_report.json
-```
+### 1. Choose the conversion route
 
-### 2. Convert a calculation tree
+| Selector | Input in each calculation folder | Intended use |
+| --- | --- | --- |
+| `--sampling mesh` | `geometry.in`, `control.in`, `Final_KS_eigenvalues.dat` | Dense post-SCF targets and mesh QA/evaluation |
+| `--sampling path` | `geometry.in`, `band1*.out` | Selected band-path targets, band-line validation and plots |
+
+`path` remains the default for old commands, but explicit selection is recommended.
+The old `--eigenvalue-source postscf` and `--eigenvalue-source band` options remain
+aliases for `mesh` and `path`. If both selectors are supplied, they must agree.
+There is no source auto-detection or fallback. These flags select **existing
+calculation output**; they do not run FHI-aims or generate new k-points.
+
+#### Dense-grid conversion
+
+Convert one case:
 
 ```bash
-python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-    --band-policy adaptive-factor --band-factor 2.0
+python conversion/aims_to_deeptb.py CASE_DIR -o MESH_SET --sampling mesh --band-policy adaptive-factor --band-factor 2.0
 ```
 
-Resume with the same selection policy:
+Convert a calculation tree, then resume it if needed:
 
 ```bash
-python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-    --band-policy adaptive-factor --band-factor 2.0 \
-    --resume
+python conversion/batch_aims_to_deeptb.py AIMS_ROOT MESH_DATA --sampling mesh --band-policy adaptive-factor --band-factor 2.0
+python conversion/batch_aims_to_deeptb.py AIMS_ROOT MESH_DATA --sampling mesh --band-policy adaptive-factor --band-factor 2.0 --resume
 ```
 
-Each calculation is stored as one `set.XXXXXX` directory. `manifest.json` and `manifest.csv` record source paths, conversion status, composition, band-selection metadata, and failures.
+Use `--ks-file NAME` if the post-SCF filename differs. `control.in` is required
+to check spin/SOC settings. Dense conversion currently supports scalar,
+non-spin-polarized calculations only.
 
-### Dense-k post-SCF datasets
+#### Band-path conversion
 
-Use an explicit source when converting the new dense-grid calculations:
+Convert one case:
 
 ```bash
-python conversion/aims_to_deeptb.py CASE_DIR -o MESH_SET \
-    --eigenvalue-source postscf \
-    --band-policy adaptive-factor --band-factor 2.0
-
-python conversion/batch_aims_to_deeptb.py INPUT_ROOT MESH_DATA \
-    --eigenvalue-source postscf \
-    --band-policy adaptive-factor --band-factor 2.0
+python conversion/aims_to_deeptb.py CASE_DIR -o PATH_SET --sampling path --band-policy adaptive-factor --band-factor 2.0
 ```
 
-`postscf` discovers `geometry.in` plus `Final_KS_eigenvalues.dat`, even when
-there are no `band1*.out` files. Use `--ks-file NAME` for a different filename.
-`control.in` is required to check spin/SOC settings. The default source remains
-`band`, preserving existing command behavior. There is no automatic fallback or
-mixing of mesh and path spectra.
+Convert a calculation tree, then resume it if needed:
 
-The supported post-SCF format contains a fractional-coordinate header
-`# k-point in recip. lattice units: kx ky kz` followed by consecutive
-`state occupation eigenvalue` rows, with energies in **eV**. Fortran D exponents
-are accepted. The reader preserves file order and pairs every coordinate with
-its occupations and energies; it does not construct a grid from `control.in`.
-It rejects inconsistent/empty blocks, duplicate states or reciprocal k-points,
-nonfinite values, and recognized multi-spin layouts. Declared state/k-point
-counts are checked when present. A missing complete block cannot be detected
-without a declared count; independently confirm successful FHI-aims completion.
-Collinear spin and SOC are currently unsupported in this dense-grid route.
+```bash
+python conversion/batch_aims_to_deeptb.py AIMS_ROOT PATH_DATA --sampling path --band-policy adaptive-factor --band-factor 2.0
+python conversion/batch_aims_to_deeptb.py AIMS_ROOT PATH_DATA --sampling path --band-policy adaptive-factor --band-factor 2.0 --resume
+```
 
-The output contract is:
+Use `--band-glob 'band1*.out'` to customize path-file selection. Path segments
+follow natural filename order; repeated boundaries are removed by default.
+`--keep-boundary-duplicates` is available in the single-case converter. The batch
+converter skips `band2*.out` cases unless `--include-spin2` explicitly allows
+using only the selected channel; it does not combine spin channels.
+
+#### Band policies and optional charge (both routes)
+
+`adaptive-factor` strips the inferred H/B/C/N/O 1s core and keeps about
+`band_factor * N_full` non-core bands, extending the selection when needed to
+retain occupied states. Available-state limits still apply. Alternatives:
+
+```bash
+python conversion/aims_to_deeptb.py CASE_DIR -o MESH_ALL --sampling mesh --band-policy all-noncore
+python conversion/aims_to_deeptb.py CASE_DIR -o PATH_FIXED --sampling path --band-policy fixed-noncore --noncore-bands 12
+```
+
+Both policies also work in the batch converter and with either sampling choice.
+For a known neutral case add `--charge 0`; positive charge removes electrons.
+When the selected window starts immediately after the inferred core, the report
+records `modeled_electrons = sum(neutral valence contributions) - charge`, using
+H:1, B:3, C:4, N:5, O:6. Charge omitted, unsupported chemistry or an incompatible
+window gives `null`. This diagnostic field does not configure prediction-time
+Fermi settings. Occupations are never summed without k-point weights to infer an
+electron count. Convert different known charge states in separate batch groups.
+
+### 2. Split, optionally weight, then inspect the selected route
+
+At least two selected sets are required for a train/validation split:
+
+```bash
+python preprocessing/split_train_val.py MESH_DATA MESH_SPLIT --sampling mesh --val-fraction 0.2 --seed 42
+python preprocessing/split_train_val.py PATH_DATA PATH_SPLIT --sampling path --val-fraction 0.2 --seed 42
+```
+
+Add `--dry-run` to preview. Splitting rejects a mixture of mesh and path sets.
+The split manifest records sampling as well as structure membership. Set IDs are
+local to each conversion root: use the source mappings to align physical
+structures across experiments. The same seed alone does not guarantee matching
+membership if the mesh and path collections contain different cases. Do not
+train on a structure's mesh and validate on the same structure's path.
+
+Optional weighting (omit `--apply` to inspect without changing metadata):
+
+```bash
+python preprocessing/weight_band_regions.py MESH_SPLIT --recursive --sampling mesh --apply
+python preprocessing/weight_band_regions.py PATH_SPLIT --recursive --sampling path --apply
+```
+
+QA without a checkpoint, with or without weighting metadata:
+
+```bash
+python visualization/visualize_band_regions.py MESH_SPLIT --sampling mesh --mode selected --output RESULTS/mesh_qa
+python visualization/visualize_band_regions.py PATH_SPLIT --sampling path --mode selected --output RESULTS/path_qa
+python visualization/visualize_band_regions.py PATH_SPLIT --sampling path --mode full --output RESULTS/path_full_qa
+```
+
+Mesh QA uses unconnected points versus the k-point index in file order, with no
+high-symmetry labels. Path QA uses cumulative reciprocal-space distance. `full`
+QA reloads original path bands and is unavailable for mesh sets.
+
+### 3. Evaluate a checkpoint on the selected route
+
+After training in your DeePTB environment, supply the actual checkpoint:
+
+```bash
+python evaluation/evaluate_model.py --checkpoint MODEL.pth --train MESH_SPLIT/train --val MESH_SPLIT/val --sampling mesh --output RESULTS/mesh_eval --make-plots
+python evaluation/evaluate_model.py --checkpoint MODEL.pth --train PATH_SPLIT/train --val PATH_SPLIT/val --sampling path --output RESULTS/path_eval --make-plots
+```
+
+For single-set, band-index-resolved errors:
+
+```bash
+python evaluation/evaluate_band_error.py --checkpoint MODEL.pth --set MESH_DATA/set.000000 --mode supervised --output RESULTS/mesh_error
+python evaluation/evaluate_band_error.py --checkpoint MODEL.pth --set PATH_DATA/set.000000 --mode full --output RESULTS/path_error
+```
+
+Mesh error evaluation supports `supervised` mode only. `full` reloads original
+non-core path bands. Neither error plot turns the mesh into a band path.
+
+For host-like edge/gap comparison between two checkpoints or training runs:
+
+```bash
+python evaluation/compare_frontiers.py --source-a RUN_A --source-b RUN_B --train MESH_SPLIT/train --val MESH_SPLIT/val --sampling mesh --output RESULTS/mesh_frontiers --make-plots
+python evaluation/compare_frontiers.py --source-a RUN_A --source-b RUN_B --train PATH_SPLIT/train --val PATH_SPLIT/val --sampling path --output RESULTS/path_frontiers --make-plots
+```
+
+Frontier comparisons use a host-edge heuristic over the supplied points; mesh
+and path extrema may differ. This tool assumes neutral charge by default: supply
+`--charge-map` for charged cases. Reused evaluation predictions must come from
+the exact same structures, k-points and set mapping.
+
+### 4. Use path datasets for band-line and band/DOS plots
+
+```bash
+python visualization/band_plot.py --checkpoint MODEL.pth --set PATH_DATA/set.000000 --mode supervised --output RESULTS/path_band
+python visualization/band_dos_compare.py --set PATH_DATA/set.000000 --mode full --plot-content ground-truth --dos-mode all --output RESULTS/path_dos
+python visualization/batch_visualize_run.py --run-dir PATH_RUN --backend band --mode supervised --dry-run
+python visualization/batch_visualize_run.py --run-dir PATH_RUN --backend both --mode full
+```
+
+`PATH_RUN` input JSON must reference **path** train/validation roots. Batch
+visualization checks every discovered set in the selected splits before limiting
+cases or loading a model; any mesh set causes an error, also in `--dry-run`.
+A model trained on mesh data can be plotted on a separate converted path dataset
+using the single-case commands with its checkpoint. Ground-truth DOS plotting
+also needs the original FHI-aims DOS files; see the detailed commands below.
+
+## Sampling metadata, outputs and resume rules
 
 | File | Shape / meaning |
 | --- | --- |
 | `xdat.traj` | One ASE structure |
-| `kpoints.npy` | `(Nk, 3)`, fractional reciprocal coordinates in source order |
-| `eigenvalues.npy` | `(1, Nk, Nb)`, selected reference energies in native eV gauge |
-| `occupations.npy` | `(1, Nk, Nb)`, occupations for the same selected states; diagnostic sidecar |
-| `info.json` | Existing DeePTB training metadata |
-| `conversion_report.json` | Source type, mesh/path sampling, input hashes, band selection and optional electron count |
+| `kpoints.npy` | `(Nk, 3)`, fractional reciprocal coordinates |
+| `eigenvalues.npy` | `(1, Nk, Nb)`, selected energies in native eV gauge |
+| `occupations.npy` | `(1, Nk, Nb)`, occupations paired with the selected states |
+| `info.json` | DeePTB training metadata |
+| `conversion_report.json` | `kpoint_sampling`, source, hashes, band policy and optional electron count |
 
-The `1` is one structure, not a spin axis. Geometry, k-points, occupations and
-energies must stay paired. Keep path calculations in a **separate dataset** for
-band-line validation; a mesh is not a high-symmetry path.
+The leading `1` is a frame axis, not spin. Batch output is `set.XXXXXX` plus
+`manifest.json` and `manifest.csv`. Keep the report and occupations with the
+arrays; splitting copies or links the complete set directory.
 
-For a known neutral calculation add `--charge 0`; for a charged calculation use
-its explicit net charge (positive removes electrons). With the inferred 1s core
-removed and the non-core spectrum starting at its first band, the report records
-`electron_count.modeled_electrons = sum(neutral valence contributions) - charge`
-using H:1, B:3, C:4, N:5, O:6. If charge is omitted or the window does not meet
-those conditions, the modeled count is unknown (`null`). No electron count is
-inferred from an unweighted sum over k-point occupations. This report field does
-not configure DeePTB's optional prediction-time electron/Fermi settings.
+Downstream collection tools (`split_train_val.py`, `weight_band_regions.py`,
+`visualize_band_regions.py`, `evaluate_model.py`, `compare_frontiers.py`) accept
+`--sampling mesh`, `--sampling path`, or `--sampling all` (default). No matches
+is an error. `all` preserves legacy collection behavior except mixed sampling
+is rejected when splitting. Single-set plotting reads sampling from the report.
+Legacy reports without sampling/source metadata are treated as path datasets;
+unknown or contradictory metadata is rejected. Do not remove mesh reports.
 
-Resume uses the same command plus `--resume`. It now checks source identity,
-source type, charge, band policy, input content hashes, and required output
-presence. Older reports without hashes must be regenerated in a fresh output
-root. Source changes or changes in the discovered set ordering are rejected
-rather than reusing a different calculation under an existing set ID. Batch
-failures return a nonzero exit code and remain recorded in the manifests.
+Use sibling source/output roots. Batch output cannot be nested inside the
+source tree, and an existing mesh collection cannot be reused as a path output
+(or vice versa), even with `--overwrite`. Choose a fresh output root instead.
+`--resume` and `--overwrite` are mutually exclusive. Resume checks source
+identity/type, charge, policy, input SHA-256 hashes and required output presence.
+Source changes or changed set ordering are rejected. Hashless old reports need
+regeneration. Conversion failures return a nonzero exit code and are recorded
+in the manifests.
 
-Use sibling source/output roots; nesting conversion output inside its source
-is blocked. For mixed charge states, convert groups separately with the correct
-charge, or omit `--charge` until per-case charge metadata is available.
+The supported dense format contains a fractional-coordinate header
+`# k-point in recip. lattice units: kx ky kz` followed by consecutive
+`state occupation eigenvalue` rows in eV. Fortran D exponents are accepted.
+The parser preserves source order and rejects incomplete/inconsistent blocks,
+duplicate states/reciprocal points, nonfinite values and recognized multi-spin
+layouts. Declared counts are checked when present. Entire missing blocks cannot
+be detected without counts; independently verify FHI-aims completion.
+It does not reconstruct the grid from `control.in`. See the
+[FHI-aims post-SCF output documentation](https://www.fhi-aims.org/uploads/manual/Ch3/S56.html).
 
-Existing splitting and energy-region weighting operate on the stored arrays and
-can be used with mesh data. Freeze structure membership and verify the source
-mapping in manifests before comparing mesh and path experiments; do not put the
-same physical structure in training via its mesh and validation via its path.
+Errors and weighting diagnostics give equal weight to stored k-points. This
+repository does not add Brillouin-zone quadrature weights or mesh DOS integration.
+An unweighted symmetry-reduced sample is not a BZ integral.
 
-| Diagnostic | Dense mesh support |
-| --- | --- |
-| `evaluate_model.py` | Stored-target errors at the actual mesh coordinates |
-| `evaluate_band_error.py --mode supervised` | Errors versus selected band index |
-| `visualize_band_regions.py --mode selected` | Scatter plot versus k-point index, with weighting boundaries |
-| Band plot and band+DOS plot scripts | Require a separate path dataset; reject mesh input |
-| Full non-core reload modes | Still path-based; use the supported selected/supervised mode for mesh sets |
-
-Generate mesh QA plots without a model checkpoint (NumPy, ASE and Matplotlib
-required):
+Run the local checks (also run in GitHub Actions):
 
 ```bash
-python visualization/visualize_band_regions.py MESH_DATA --mode selected
-```
-
-Each mesh plot uses unconnected points versus the original k-point index,
-without high-symmetry labels or a path-distance axis. The QA summary CSV records
-`kpoint_sampling`. Energy-region shading appears when weighting metadata exists.
-
-The current DeePTB loss/evaluation gives equal weight to stored k-points; this
-change does not implement Brillouin-zone quadrature weights or DOS integration.
-Do not interpret averages over symmetry-reduced points as BZ-weighted metrics.
-
-Format reference: [FHI-aims `output postscf_eigenvalues`](https://www.fhi-aims.org/uploads/manual/Ch3/S56.html).
-Local validation uses synthetic fixtures; validate one representative NSCC output
-before converting the production tree. A real NSCC file and a trained DeePTB
-checkpoint are not included in this repository.
-
-Run the conversion and mesh QA regression checks locally:
-
-```bash
-python -m pip install numpy ase matplotlib
 python -m unittest discover -s tests -v
 python -m compileall -q conversion preprocessing evaluation visualization
 ```
 
-The same checks run in GitHub Actions on pushes and pull requests. They cover
-coordinate/energy pairing, malformed spectra, occupations, optional charge,
-source-hash resume checks, legacy path conversion, and mesh QA behavior. Model
-inference still requires a separate DeePTB environment and checkpoint.
+Tests use synthetic spectra and cover both source routes, selection conflicts,
+no fallback, occupations, charge, resume, sampling filters, split integrity and
+mesh QA/guards. A real NSCC output and trained checkpoint are not included;
+validate representative production input and inference in your own environment.
 
-### 3. Split converted data into train/validation sets
+
+## Dataset splitting options
+
 
 Create a reproducible 80/20 split:
 
@@ -382,7 +453,7 @@ This plots exactly the retained `eigenvalues.npy` spectrum used by the detector.
 ### Full available non-core FHI-aims spectrum
 
 ```bash
-python visualization/visualize_band_regions.py DATA --mode full
+python visualization/visualize_band_regions.py PATH_DATA --sampling path --mode full
 ```
 
 Full mode reloads `band1*.out`, strips the inferred 1s core bands, and verifies that the converted target is the expected prefix of the reconstructed non-core spectrum.
@@ -397,7 +468,7 @@ python visualization/visualize_band_regions.py DATA \
 
 The plots use:
 
-- black lines for FHI-aims bands;
+- black lines for path bands, or unconnected black points for mesh spectra;
 - light orange shading for the detected low-density candidate region;
 - dashed red lines for `emin` and `emax`;
 - per-panel annotations for the split, offset, region width, confidence, and active metadata state.
@@ -413,6 +484,10 @@ python visualization/visualize_band_regions.py DATA \
 Batch runs write individual PNGs, a CSV summary, and 4x4 contact sheets by default.
 
 ## Model evaluation
+
+Use `--sampling mesh` or `--sampling path` on batch evaluation and frontier
+comparison commands to select one route. Band-line and band/DOS commands
+below require path data.
 
 ### Batch-evaluate a checkpoint
 
@@ -432,7 +507,7 @@ Supervised target only:
 ```bash
 python visualization/band_plot.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
-    --set DATA/set.000000 \
+    --set PATH_DATA/set.000000 \
     --output RESULTS/band_plot \
     --mode supervised
 ```
@@ -442,7 +517,7 @@ Full available non-core spectrum:
 ```bash
 python visualization/band_plot.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
-    --set DATA/set.000000 \
+    --set PATH_DATA/set.000000 \
     --output RESULTS/band_plot_full \
     --mode full
 ```
@@ -455,7 +530,7 @@ Ground truth only:
 
 ```bash
 python visualization/band_dos_compare.py \
-    --set DATA/set.000000 \
+    --set PATH_DATA/set.000000 \
     --output RESULTS/band_dos_dft \
     --plot-content ground-truth \
     --mode full \
@@ -467,7 +542,7 @@ DeePTB prediction only:
 ```bash
 python visualization/band_dos_compare.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
-    --set DATA/set.000000 \
+    --set PATH_DATA/set.000000 \
     --output RESULTS/band_dos_pred \
     --plot-content prediction \
     --mode full \
@@ -481,7 +556,7 @@ FHI-aims vs DeePTB:
 ```bash
 python visualization/band_dos_compare.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
-    --set DATA/set.000000 \
+    --set PATH_DATA/set.000000 \
     --output RESULTS/band_dos_compare \
     --plot-content comparison \
     --mode full \
@@ -552,7 +627,7 @@ RUN/visualization/
 ```bash
 python evaluation/evaluate_band_error.py \
     --checkpoint RUN/checkpoint/nnsk.epN.pth \
-    --set DATA/set.000000 \
+    --set PATH_DATA/set.000000 \
     --output RESULTS/band_error_epN \
     --mode full
 ```
@@ -563,7 +638,7 @@ Compare two checkpoints:
 python evaluation/evaluate_band_error.py \
     --checkpoint RUN_A/checkpoint/nnsk.epN.pth \
     --checkpoint2 RUN_B/checkpoint/nnsk.epM.pth \
-    --set DATA/set.000000 \
+    --set PATH_DATA/set.000000 \
     --output RESULTS/band_error_compare \
     --mode full
 ```
@@ -588,7 +663,7 @@ The workflow is specialized for the hBN defect dataset rather than being a gener
 
 - Core-band inference is defined for H/B/C/N/O: H contributes zero inferred frozen 1s spatial core bands; B/C/N/O contribute one each.
 - The converters and evaluators avoid silently combining `band2*.out` with the current single-channel workflow.
-- The visualization scripts use the hBN `M -> Gamma -> K -> M` high-symmetry path convention.
+- Path-band visualization uses the hBN `M -> Gamma -> K -> M` convention; mesh QA uses file-order indices.
 - `weight_band_regions.py` detects a spectral separation, not a chemically exact 2s projector. The low-density region is a detection aid; the selected `emin` is the actual weighting boundary.
 - Weighted and unweighted validation losses are not directly comparable when different `eout_weight` settings are used. Preserve an unweighted evaluation route when comparing training strategies.
 - `band_dos_compare.py` keeps FHI-aims in its native band/DOS energy gauge and rigidly aligns DeePTB to it when `--align loss` is used.
@@ -598,7 +673,7 @@ The workflow is specialized for the hBN defect dataset rather than being a gener
 
 ## Python dependencies
 
-- Python 3
+- Python 3.10 or newer
 - NumPy
 - ASE
 - PyTorch
@@ -643,13 +718,20 @@ python preprocessing/weight_band_regions.py SPLIT_DATA --recursive --activate-we
 The dataset eigenvalues are identical between the two runs; only the active `info.json` energy-window metadata and the training loss configuration differ.
 
 
-After training, batch visualization can be launched directly from the run metadata:
+After path training, batch visualization can be launched from the path run metadata:
 
 ```bash
 python visualization/batch_visualize_run.py \
-    --run-dir runs/4by4_52d_200ep \
+    --run-dir PATH_RUN \
     --backend band \
     --mode full
 ```
 
 Use `--backend both` when the band+DOS diagnostics are also required.
+
+For a mesh experiment use mesh QA and stored-target evaluation instead:
+
+```bash
+python visualization/visualize_band_regions.py MESH_SPLIT --sampling mesh --mode selected --output RESULTS/mesh_qa
+python evaluation/evaluate_model.py --checkpoint MODEL.pth --train MESH_SPLIT/train --val MESH_SPLIT/val --sampling mesh --output RESULTS/mesh_eval --make-plots
+```

@@ -1,4 +1,12 @@
 """
+Select one sampling type before splitting (repository-root commands):
+    python preprocessing/split_train_val.py MESH_DATA MESH_SPLIT --sampling mesh --val-fraction 0.2 --seed 42
+    python preprocessing/split_train_val.py PATH_DATA PATH_SPLIT --sampling path --val-fraction 0.2 --seed 42
+Add --dry-run to preview. Mixed mesh/path splits are rejected; default --sampling
+all works for a homogeneous collection. At least two selected sets are required.
+Membership is recorded in split_manifest.json. Use consistent physical-structure
+membership when comparing mesh/path experiments; set IDs are local to each root.
+
 Create reproducible DeePTB train/validation dataset trees.
 
 Commands
@@ -36,6 +44,11 @@ import random
 import re
 import shutil
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import add_sampling_filter, filter_sets, dataset_sampling
 
 SCRIPT_NAME = "split_train_val.py"
 SCHEMA_VERSION = 1
@@ -222,10 +235,12 @@ def write_manifests(
     val_names: list[str],
 ) -> None:
     records = [
-        {"set": name, "split": "train", "source": str(input_root / name)}
+        {"set": name, "split": "train", "source": str(input_root / name),
+         "kpoint_sampling": selection["kpoint_sampling"]}
         for name in train_names
     ] + [
-        {"set": name, "split": "val", "source": str(input_root / name)}
+        {"set": name, "split": "val", "source": str(input_root / name),
+         "kpoint_sampling": selection["kpoint_sampling"]}
         for name in val_names
     ]
     records.sort(key=lambda row: int(row["set"][4:]))
@@ -251,7 +266,7 @@ def write_manifests(
     with (output_root / "split_manifest.csv").open(
         "w", newline="", encoding="utf-8"
     ) as f:
-        writer = csv.DictWriter(f, fieldnames=["set", "split", "source"])
+        writer = csv.DictWriter(f, fieldnames=["set", "split", "source", "kpoint_sampling"])
         writer.writeheader()
         writer.writerows(records)
 
@@ -325,6 +340,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    add_sampling_filter(parser)
     args = parser.parse_args()
 
     if args.val_count is not None and args.val_count < 1:
@@ -348,7 +364,12 @@ def main() -> None:
             "or pass --allow-nested-output if this is intentional."
         )
 
-    set_dirs = discover_sets(input_root)
+    set_dirs = filter_sets(discover_sets(input_root), args.sampling)
+    samplings = {dataset_sampling(p) for p in set_dirs}
+    if len(samplings) != 1:
+        raise ValueError("Mixed mesh/path split rejected; select --sampling mesh or --sampling path")
+    if len(set_dirs) < 2:
+        raise ValueError("Need at least two sets of the selected sampling type")
     set_names = [p.name for p in set_dirs]
 
     val_names, selection = choose_validation_sets(
@@ -359,6 +380,7 @@ def main() -> None:
         val_fraction=args.val_fraction,
         seed=args.seed,
     )
+    selection["kpoint_sampling"] = next(iter(samplings))
     val_set = set(val_names)
     train_names = [name for name in set_names if name not in val_set]
 

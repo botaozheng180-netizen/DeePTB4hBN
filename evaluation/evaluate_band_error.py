@@ -1,4 +1,11 @@
 """
+Mesh and path error analysis (repository-root commands):
+    python evaluation/evaluate_band_error.py --checkpoint MODEL.pth --set MESH_DATA/set.000000 --output RESULTS/mesh_error --mode supervised
+    python evaluation/evaluate_band_error.py --checkpoint MODEL.pth --set PATH_DATA/set.000000 --output RESULTS/path_error --mode full
+Mesh supports supervised mode only. Plots show error versus band index; they
+do not connect mesh k-points as a band path. Single-set sampling is read from
+conversion_report.json. Requires a working DeePTB checkpoint environment.
+
 Evaluate DeePTB error band-by-band for one hBN structure, optionally comparing
 two checkpoints and including non-core DFT bands above the supervised cutoff.
 
@@ -45,6 +52,11 @@ import csv
 import json
 import re
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import dataset_sampling
 from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
@@ -596,7 +608,7 @@ def main():
 
     report_path = args.set_dir / "conversion_report.json"
     if (args.mode == "full" and report_path.exists()
-            and json.loads(report_path.read_text()).get("kpoint_sampling") == "mesh"):
+            and dataset_sampling(args.set_dir) == "mesh"):
         raise ValueError("Dense meshes support --mode supervised; full mode reloads path bands")
 
     if args.mode == "supervised":

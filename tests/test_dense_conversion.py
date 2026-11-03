@@ -1,6 +1,7 @@
-"""Run with python -m unittest discover -s tests -v (NumPy and ASE required)."""
+"""Run: python -m unittest discover -s tests -v (NumPy, ASE, Matplotlib required)."""
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -105,7 +106,7 @@ class DenseConversion(unittest.TestCase):
                                  "--eigenvalue-source", "postscf", "--resume",
                                  "--band-policy", "all-noncore")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Refusing --resume", result.stdout + result.stderr)
+        self.assertIn("different sampling type", result.stdout + result.stderr)
 
     def test_spin_is_rejected(self):
         (self.case / "control.in").write_text("spin collinear\n")
@@ -179,7 +180,7 @@ class DenseConversion(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Dense meshes support --mode selected"):
             plot_one_set(out, image, **options)
 
-    def test_legacy_band_route(self):
+    def write_path_bands(self):
         rows = []
         for index, k in enumerate([0, .5], 1):
             data = " ".join(f"{occ} {energy}" for occ, energy in
@@ -187,11 +188,144 @@ class DenseConversion(unittest.TestCase):
                              (2, -6), (2, -4), (0, 2), (0, 4)])
             rows.append(f"{index} {k} 0 0 {data}\n")
         (self.case / "band1001.out").write_text("".join(rows))
+
+    def test_legacy_band_route(self):
+        self.write_path_bands()
         result = self.run_script("conversion/aims_to_deeptb.py", self.case,
                                  "-o", self.root / "out", "--band-policy", "all-noncore")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = json.loads((self.root / "out" / "conversion_report.json").read_text())
         self.assertEqual(report["kpoint_sampling"], "path")
+
+    def test_sampling_selector_with_both_sources(self):
+        self.write_path_bands()
+        for sampling, source in [("mesh", "postscf"), ("path", "band")]:
+            with self.subTest(sampling=sampling):
+                out = self.root / sampling
+                result = self.run_script("conversion/batch_aims_to_deeptb.py",
+                                         self.root / "source", out, "--sampling", sampling,
+                                         "--band-policy", "all-noncore")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                report = json.loads((out / "set.000000" / "conversion_report.json").read_text())
+                self.assertEqual(report["eigenvalue_source"], source)
+                self.assertEqual(report["kpoint_sampling"], sampling)
+                k = np.load(out / "set.000000" / "kpoints.npy")
+                np.testing.assert_array_equal(k[:, 0], [.5, 0] if sampling == "mesh" else [0, .5])
+                # Compatibility aliases can resume a run made with the new selector.
+                result = self.run_script("conversion/batch_aims_to_deeptb.py",
+                                         self.root / "source", out, "--eigenvalue-source", source,
+                                         "--band-policy", "all-noncore", "--resume")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_conflicting_selectors_and_no_fallback(self):
+        self.write_path_bands()
+        for script in ["conversion/aims_to_deeptb.py", "conversion/batch_aims_to_deeptb.py"]:
+            positional = ([self.case, "-o", self.root / "out"] if "batch_" not in script
+                          else [self.root / "source", self.root / "out"])
+            result = self.run_script(script, *positional, "--sampling", "mesh",
+                                     "--eigenvalue-source", "band")
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("conflicts", result.stderr)
+        self.ks.unlink()
+        result = self.run_script("conversion/aims_to_deeptb.py", self.case,
+                                 "-o", self.root / "out", "--sampling", "mesh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "out" / "eigenvalues.npy").exists())
+
+    def test_batch_rejects_sampling_switch_even_on_overwrite(self):
+        self.write_path_bands()
+        out = self.root / "converted"
+        args = [self.root / "source", out, "--band-policy", "all-noncore"]
+        result = self.run_script("conversion/batch_aims_to_deeptb.py", *args, "--sampling", "mesh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        before = (out / "manifest.json").read_bytes()
+        result = self.run_script("conversion/batch_aims_to_deeptb.py", *args,
+                                 "--sampling", "path", "--overwrite")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("different sampling type", result.stdout + result.stderr)
+        self.assertEqual((out / "manifest.json").read_bytes(), before)
+
+    def make_mixed_collection(self):
+        self.write_path_bands()
+        collection = self.root / "mixed"
+        for sampling, start in [("mesh", 0), ("path", 2)]:
+            out = collection / f"set.{start:06d}"
+            result = self.run_script("conversion/aims_to_deeptb.py", self.case, "-o", out,
+                                     "--sampling", sampling, "--band-policy", "all-noncore")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            shutil.copytree(out, collection / f"set.{start + 1:06d}")
+        return collection
+
+    def test_split_filters_and_rejects_mixed_sampling(self):
+        mixed = self.make_mixed_collection()
+        result = self.run_script("preprocessing/split_train_val.py", mixed,
+                                 self.root / "rejected")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Mixed mesh/path", result.stderr)
+        self.assertFalse((self.root / "rejected").exists())
+        for sampling, ids in [("mesh", {"set.000000", "set.000001"}),
+                              ("path", {"set.000002", "set.000003"})]:
+            out = self.root / f"split_{sampling}"
+            result = self.run_script("preprocessing/split_train_val.py", mixed, out,
+                                     "--sampling", sampling, "--seed", 42)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual({p.name for p in out.glob("*/set.*")}, ids)
+            for dataset in out.glob("*/set.*"):
+                self.assertTrue((dataset / "occupations.npy").exists())
+                report = json.loads((dataset / "conversion_report.json").read_text())
+                self.assertEqual(report["kpoint_sampling"], sampling)
+
+    def test_qa_and_weighting_filters(self):
+        mixed = self.make_mixed_collection()
+        result = self.run_script("preprocessing/weight_band_regions.py", mixed,
+                                 "--sampling", "mesh", "--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((mixed / "set.000000" / "info.unweighted.json").exists())
+        self.assertFalse((mixed / "set.000002" / "info.unweighted.json").exists())
+        out = self.root / "qa"
+        result = self.run_script("visualization/visualize_band_regions.py", mixed,
+                                 "--sampling", "path", "--mode", "selected",
+                                 "--output", out, "--no-contact-sheet", "--dpi", 72)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual({p.name for p in out.glob("*.png")},
+                         {"set.000002_selected.png", "set.000003_selected.png"})
+
+    def test_sampling_metadata_and_path_guard(self):
+        from sampling import dataset_sampling, require_path
+        out = self.root / "report"
+        out.mkdir()
+        self.assertEqual(dataset_sampling(out), "path")  # legacy
+        report = out / "conversion_report.json"
+        report.write_text(json.dumps({"eigenvalue_source": "postscf"}))
+        self.assertEqual(dataset_sampling(out), "mesh")
+        with self.assertRaisesRegex(ValueError, "band-path plotting"):
+            require_path(out)
+        report.write_text(json.dumps({"kpoint_sampling": "path", "eigenvalue_source": "postscf"}))
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            dataset_sampling(out)
+
+    def test_batch_plot_guard_precedes_limit_and_model_loading(self):
+        mixed = self.make_mixed_collection()
+        data = self.root / "plot_data"
+        data.mkdir()
+        shutil.copytree(mixed / "set.000002", data / "set.000000")  # path first
+        shutil.copytree(mixed / "set.000000", data / "set.000001")  # mesh later
+        run = self.root / "run"
+        run.mkdir()
+        (run / "input.json").write_text(json.dumps({
+            "data_options": {"train": {"root": str(data)}}}))
+        checkpoint = run / "dummy.pth"
+        checkpoint.write_text("not a checkpoint: dry run must not load it")
+        args = ["--run-dir", run, "--checkpoint", checkpoint, "--splits", "train",
+                "--limit", 1, "--dry-run"]
+        result = self.run_script("visualization/batch_visualize_run.py", *args)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("band-path plotting", result.stderr)
+        self.assertNotIn("No module named 'dptb'", result.stderr)
+        shutil.rmtree(data / "set.000001")
+        result = self.run_script("visualization/batch_visualize_run.py", *args)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Dry run only", result.stdout)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,12 @@
 """
+Select one sampling type for host-edge comparisons (repository-root commands):
+    python evaluation/compare_frontiers.py --source-a RUN_A --source-b RUN_B --train MESH_SPLIT/train --val MESH_SPLIT/val --sampling mesh --output RESULTS/mesh_frontiers --make-plots
+    python evaluation/compare_frontiers.py --source-a RUN_A --source-b RUN_B --train PATH_SPLIT/train --val PATH_SPLIT/val --sampling path --output RESULTS/path_frontiers --make-plots
+Default --sampling all selects both. Extrema refer only to sampled coordinates;
+a path gap and mesh gap can differ. Default charge is neutral; use --charge-map
+for charged cases. This is a host-edge heuristic, not an occupation or DOS integral.
+Requires DeePTB for checkpoint inference; cached evaluation outputs are also accepted.
+
 Compare two DeePTB prediction sources using DFT-defined host-like VBM, CBM, and
 band-gap targets across hBN defect datasets.
 
@@ -54,6 +62,11 @@ import shutil
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import add_sampling_filter, filter_cases, dataset_sampling
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -240,7 +253,8 @@ class PredictionSource:
         work_dir.mkdir(parents=True, exist_ok=True)
 
         structure_path = set_dir / "xdat.traj"
-        xlist = calculate_xlist(structure_path, kpoints)
+        xlist = (np.arange(len(kpoints), dtype=float) if dataset_sampling(set_dir) == "mesh"
+                 else calculate_xlist(structure_path, kpoints))
         kpath_kwargs = {
             "kline_type": "array",
             "kpath": kpoints,
@@ -900,6 +914,7 @@ def evaluate_case(
 
     row: Dict[str, Any] = {
         "split": split,
+        "kpoint_sampling": dataset_sampling(set_dir),
         "set_id": set_dir.name,
         "charge": charge,
         "natoms": sum(comp.values()),
@@ -1110,6 +1125,7 @@ def main():
         ),
     )
     p.add_argument("--make-plots", action="store_true")
+    add_sampling_filter(p)
     args = p.parse_args()
 
     if args.min_overlaps < 1:
@@ -1129,9 +1145,9 @@ def main():
         label_a += "_A"
         label_b += "_B"
 
-    prepare_output_dir(args.output, args.overwrite)
     charge_map = load_charge_map(args.charge_map)
-    cases = discover_cases(args.train, args.val, args.case_glob)
+    cases = filter_cases(discover_cases(args.train, args.val, args.case_glob), args.sampling)
+    prepare_output_dir(args.output, args.overwrite)
 
     source_a = PredictionSource.create(label_a, args.source_a)
     source_b = PredictionSource.create(label_b, args.source_b)
@@ -1197,7 +1213,7 @@ def main():
         raise RuntimeError("All cases failed.")
 
     fields = [
-        "split", "set_id", "charge", "natoms", "B", "C", "N", "O",
+        "split", "set_id", "kpoint_sampling", "charge", "natoms", "B", "C", "N", "O",
         "valence_electrons", "fully_occupied_bands",
         "partially_occupied_bands", "first_strictly_unoccupied_band",
         "occupancy_note",

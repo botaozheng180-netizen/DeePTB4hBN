@@ -1,40 +1,24 @@
 """
-Batch-convert a directory tree of FHI-aims hBN calculations into one-frame
-DeePTB datasets using ``aims_to_deeptb.py``.
+Batch-convert a tree of FHI-aims calculations using one selected source.
 
-Usage
------
-Recommended adaptive conversion::
+Run from the repository root:
+    python conversion/batch_aims_to_deeptb.py AIMS_ROOT MESH_DATA --sampling mesh --band-policy adaptive-factor --band-factor 2.0
+    python conversion/batch_aims_to_deeptb.py AIMS_ROOT PATH_DATA --sampling path --band-policy adaptive-factor --band-factor 2.0
+Resume with the identical options plus --resume, for example:
+    python conversion/batch_aims_to_deeptb.py AIMS_ROOT MESH_DATA --sampling mesh --band-policy adaptive-factor --band-factor 2.0 --resume
 
-    python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-        --band-policy adaptive-factor --band-factor 2.0
+Mesh requires geometry.in, control.in and Final_KS_eigenvalues.dat in each case.
+Path requires geometry.in and band1*.out. Default: path. Old
+--eigenvalue-source postscf/band is accepted; conflicting selectors fail.
+Use separate sibling source/mesh/path roots. An output collection cannot switch
+sampling type, including with --overwrite. Resume checks source identity, input
+hashes, policy, charge and output presence; older hashless reports need rebuilding.
 
-Resume an interrupted conversion without re-running completed sets::
-
-    python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-        --band-policy adaptive-factor --band-factor 2.0 --resume
-
-Override the default converter with another custom converter::
-
-    python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
-        --converter conversion/custom_aims_to_deeptb.py \
-        --band-policy adaptive-factor --band-factor 2.0
-
-Output layout
--------------
-Each successful source calculation is written to a separate directory::
-
-    OUTPUT_ROOT/set.000000/
-    OUTPUT_ROOT/set.000001/
-    ...
-
-``manifest.json`` and ``manifest.csv`` record the source-to-set mapping,
-selected band policy, band count, atom count, composition, and failures.
-
-Each set contains one structure/frame.  This allows different supercell sizes
-and adaptive band counts to coexist in one dataset collection.  Cases containing
-``band2*.out`` are skipped by default so that a second spin channel is not
-silently discarded; use ``--include-spin2`` only when that behavior is intended.
+Both routes accept --band-policy all-noncore or --band-policy fixed-noncore
+--noncore-bands 12. Add --charge 0 only for known neutral cases; group charged
+calculations separately. Outputs are set.XXXXXX directories and JSON/CSV manifests.
+Path cases containing band2*.out are skipped unless --include-spin2 explicitly
+permits using only the chosen channel. Dense spin/SOC conversion is unsupported.
 """
 
 from __future__ import annotations
@@ -44,8 +28,12 @@ import csv
 import hashlib
 import json
 import subprocess
-import sys
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import add_conversion_sampling, resolve_conversion_sampling, dataset_sampling
 from typing import Dict, List
 
 
@@ -114,7 +102,7 @@ def write_manifests(records: List[Dict], out_root: Path) -> None:
 def build_parser():
     p = argparse.ArgumentParser(
         description=(
-            "Recursively convert FHI-aims calculations into separate "
+            "Recursively convert selected FHI-aims mesh or path calculations into separate "
             "DeePTB sets using an explicit non-core band-selection policy."
         )
     )
@@ -128,7 +116,7 @@ def build_parser():
     )
     p.add_argument("--geometry", default="geometry.in")
     p.add_argument("--band-glob", default="band1*.out")
-    p.add_argument("--eigenvalue-source", choices=["band", "postscf"], default="band")
+    add_conversion_sampling(p)
     p.add_argument("--ks-file", default="Final_KS_eigenvalues.dat")
     p.add_argument("--charge", type=float, default=None)
     p.add_argument(
@@ -191,7 +179,9 @@ def build_parser():
 
 
 def main():
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    resolve_conversion_sampling(args, parser)
     input_root = args.input_root.resolve()
     output_root = args.output_root.resolve()
     converter = args.converter.resolve()
@@ -223,6 +213,11 @@ def main():
         raise SystemExit("Output root must be outside the source tree")
     if args.resume and args.overwrite:
         raise SystemExit("Choose --resume or --overwrite, not both")
+    # A collection must keep one sampling type, including on --overwrite.
+    for existing in output_root.glob("set.*"):
+        if existing.is_dir() and (existing / "conversion_report.json").exists():
+            if dataset_sampling(existing) != args.sampling:
+                raise SystemExit("Output root contains a different sampling type; use separate mesh/path roots")
     output_root.mkdir(parents=True, exist_ok=True)
 
     source_glob = args.ks_file if args.eigenvalue_source == "postscf" else args.band_glob

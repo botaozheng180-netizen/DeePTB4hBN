@@ -1,4 +1,11 @@
 """
+Path-only plotting (repository-root command):
+    python visualization/band_plot.py --checkpoint MODEL.pth --set PATH_DATA/set.000000 --output RESULTS/path_band --mode supervised
+Use --mode full for original non-core path bands. Sampling is read from the set
+report; mesh sets are rejected. For mesh QA instead run:
+    python visualization/visualize_band_regions.py MESH_DATA --sampling mesh --mode selected
+Requires a working DeePTB checkpoint environment.
+
 Plot and compare FHI-aims DFT bands with a DeePTB checkpoint on the same
 k-point path for one converted structure.
 
@@ -43,6 +50,11 @@ import argparse
 import json
 import re
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import require_path
 from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
@@ -395,9 +407,7 @@ def main():
     set_dir = Path(args.set_dir)
     output_dir = Path(args.output)
 
-    report_path = set_dir / "conversion_report.json"
-    if report_path.exists() and json.loads(report_path.read_text()).get("kpoint_sampling") == "mesh":
-        raise ValueError("Band-path plotting requires a separate path dataset. This set contains a dense mesh; use evaluate_model.py or evaluate_band_error.py --mode supervised.")
+    require_path(set_dir)
 
     structure_path = set_dir / "xdat.traj"
     kpoints_path = set_dir / "kpoints.npy"

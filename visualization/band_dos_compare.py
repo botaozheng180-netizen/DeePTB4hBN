@@ -1,4 +1,13 @@
 """
+Path-only band/DOS plotting (repository-root commands):
+    python visualization/band_dos_compare.py --set PATH_DATA/set.000000 --output RESULTS/path_dos --plot-content ground-truth --mode full --dos-mode all
+    python visualization/band_dos_compare.py --checkpoint MODEL.pth --set PATH_DATA/set.000000 --output RESULTS/path_compare --plot-content comparison --mode supervised --kmesh 30 30 1
+Sampling is read from the set report; mesh input is rejected. --kmesh controls
+prediction DOS integration; it does not change the stored path into a mesh.
+For mesh QA instead run:
+    python visualization/visualize_band_regions.py MESH_DATA --sampling mesh --mode selected
+This script requires the DeePTB/PyTorch environment, including ground-truth mode.
+
 Plot FHI-aims and DeePTB band structures together with total and
 species-projected DOS for one converted hBN structure.
 
@@ -66,6 +75,11 @@ import math
 import re
 import warnings
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import require_path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
@@ -889,9 +903,7 @@ def main():
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
 
-    report_path = set_dir / "conversion_report.json"
-    if report_path.exists() and json.loads(report_path.read_text()).get("kpoint_sampling") == "mesh":
-        raise ValueError("Band-path plotting requires a separate path dataset. This set contains a dense mesh; use evaluate_model.py or evaluate_band_error.py --mode supervised.")
+    require_path(set_dir)
 
     structure_path = set_dir / "xdat.traj"
     kpoints_path = set_dir / "kpoints.npy"

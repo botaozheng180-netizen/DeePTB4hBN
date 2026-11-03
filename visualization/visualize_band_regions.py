@@ -1,4 +1,12 @@
 """
+Mesh and path QA (repository-root commands; no checkpoint needed):
+    python visualization/visualize_band_regions.py MESH_SPLIT --sampling mesh --mode selected --output RESULTS/mesh_qa
+    python visualization/visualize_band_regions.py PATH_SPLIT --sampling path --mode selected --output RESULTS/path_qa
+    python visualization/visualize_band_regions.py PATH_SPLIT --sampling path --mode full --output RESULTS/path_full_qa
+Mesh plots use unconnected points versus file-order k-point index. Full mode
+reloads path bands and rejects mesh sets. Default --sampling all selects both;
+--mode selected handles both using their metadata. Weighting metadata is optional.
+
 Visual QA for weight_band_regions.py.
 
 Commands
@@ -25,6 +33,11 @@ import json
 import math
 import re
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import add_sampling_filter, filter_sets, dataset_sampling
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -353,9 +366,7 @@ def plot_one_set(
     n_core = None
     n_all = None
     aims_dir = None
-    report_path = set_dir / "conversion_report.json"
-    report = load_json(report_path) if report_path.exists() else {}
-    if mode == "full" and report.get("kpoint_sampling") == "mesh":
+    if mode == "full" and dataset_sampling(set_dir) == "mesh":
         raise ValueError("Dense meshes support --mode selected; full mode reloads path bands")
     if mode == "selected":
         spectrum = selected
@@ -373,7 +384,7 @@ def plot_one_set(
             if dmax > 2e-5:
                 raise ValueError(f"Converted target is not the expected non-core prefix; max |dE|={dmax:.3e} eV")
 
-    mesh = report.get("kpoint_sampling") == "mesh"
+    mesh = dataset_sampling(set_dir) == "mesh"
     x = np.arange(len(kpoints)) if mesh else cumulative_k_distance(kpoints, atoms)
     hs = [] if mesh else find_hbn_high_symmetry_points(kpoints, x)
     fig, ax = plt.subplots(figsize=(6.2, 5.0))
@@ -592,6 +603,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--contact-cols", type=int, default=4)
     p.add_argument("--contact-rows", type=int, default=4)
     p.add_argument("--contact-dpi", type=int, default=130)
+    add_sampling_filter(p)
     args = p.parse_args()
     if args.k_tol <= 0:
         p.error("--k-tol must be > 0")
@@ -609,7 +621,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     root = args.path.resolve()
-    set_dirs = find_set_dirs(root, args.recursive)
+    set_dirs = filter_sets(find_set_dirs(root, args.recursive), args.sampling)
     if args.aims_dir is not None and len(set_dirs) != 1:
         raise ValueError("--aims-dir is only supported for a single-set run")
 

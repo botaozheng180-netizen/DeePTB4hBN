@@ -1,4 +1,13 @@
 """
+Path-only batch band/DOS plotting (repository-root commands):
+    python visualization/batch_visualize_run.py --run-dir PATH_RUN --backend band --mode supervised --dry-run
+    python visualization/batch_visualize_run.py --run-dir PATH_RUN --backend both --mode full
+PATH_RUN input JSON must point to path datasets. All discovered sets in the
+selected splits are checked before --limit, backend imports or model loading;
+mesh sets cause an error, including in --dry-run. For mesh QA instead run:
+    python visualization/visualize_band_regions.py MESH_SPLIT --sampling mesh --mode selected
+For mesh checkpoint errors use evaluation/evaluate_model.py --sampling mesh.
+
 Batch band / DOS visualization for a DeePTB training run.
 
 Usage
@@ -39,9 +48,13 @@ import importlib.util
 import json
 import re
 import shutil
-import sys
 import time
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import require_path
 from typing import Any
 
 SET_RE = re.compile(r"^set\.(\d+)$")
@@ -358,6 +371,8 @@ def main() -> None:
         if split not in roots:
             raise KeyError(f"Requested split {split!r} is not defined in {input_json}")
         split_sets = discover_sets(roots[split])
+        for set_dir in split_sets:
+            require_path(set_dir)
         if args.limit is not None:
             split_sets = split_sets[: args.limit]
         cases.extend((split, p) for p in split_sets)

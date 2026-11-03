@@ -1,4 +1,12 @@
-"""Strict reader for single-channel FHI-aims post-SCF eigenvalue blocks.
+"""
+Parser helper; use it through the converter (repository-root command):
+    python conversion/aims_to_deeptb.py CASE_DIR -o MESH_SET --sampling mesh --band-policy all-noncore
+Validate the parser through:
+    python -m unittest discover -s tests -v
+This module has no standalone command-line interface. For band-path inputs use
+aims_to_deeptb.py --sampling path instead.
+
+Strict reader for single-channel FHI-aims post-SCF eigenvalue blocks.
 
 Coordinates are reciprocal lattice fractions; row order is preserved. Supports
 ``state occupation eigenvalue`` rows, with energies in eV. Spin-polarized and

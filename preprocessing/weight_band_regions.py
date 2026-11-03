@@ -1,4 +1,11 @@
 """
+Select mesh or path sets (repository-root commands):
+    python preprocessing/weight_band_regions.py MESH_SPLIT --recursive --sampling mesh --apply
+    python preprocessing/weight_band_regions.py PATH_SPLIT --recursive --sampling path --apply
+Omit --apply for a dry run. Replace --apply with --undo, --activate-weighted or
+--status to switch/inspect the same selected sets. Default --sampling all processes
+both types. Eigenvalues, occupations and sampling metadata are preserved.
+
 Detect and apply DeePTB energy-window weighting metadata.
 
 Commands
@@ -37,6 +44,11 @@ import os
 import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import add_sampling_filter, filter_sets, dataset_sampling
 from typing import Optional
 
 import numpy as np
@@ -739,6 +751,7 @@ def parse_args() -> argparse.Namespace:
         default=0.5,
         help="Recorded for provenance only; set eout_weight separately in the training input.",
     )
+    add_sampling_filter(p)
     args = p.parse_args()
 
     if args.min_gap <= 0:
@@ -767,7 +780,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     root = args.path.resolve()
-    set_dirs = find_set_dirs(root, args.recursive)
+    set_dirs = filter_sets(find_set_dirs(root, args.recursive), args.sampling)
     records = []
 
     if args.status:

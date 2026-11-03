@@ -1,45 +1,26 @@
 """
-Convert one FHI-aims band-structure calculation into a one-frame DeePTB dataset.
+Convert one FHI-aims calculation to one DeePTB frame.
 
-Usage
------
-Recommended adaptive non-core window::
+Run from the repository root (choose one route; do not combine output folders):
+    python conversion/aims_to_deeptb.py CASE_DIR -o MESH_SET --sampling mesh --band-policy adaptive-factor --band-factor 2.0
+    python conversion/aims_to_deeptb.py CASE_DIR -o PATH_SET --sampling path --band-policy adaptive-factor --band-factor 2.0
 
-    python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
-        --band-policy adaptive-factor --band-factor 2.0
+Mesh input: geometry.in, control.in (scalar/no SOC), Final_KS_eigenvalues.dat.
+Path input: geometry.in, band1*.out. Use --ks-file or --band-glob to customize.
+Default: path. Old --eigenvalue-source postscf/band remains compatible; conflicting
+selectors fail. There is no fallback to the other source, even if both exist.
 
-Keep all available non-core bands::
+Band policies (valid for both routes):
+    --band-policy all-noncore
+    --band-policy fixed-noncore --noncore-bands 12
+For a known neutral case add --charge 0; positive charge removes electrons.
+Charge is optional; omitted charge leaves modeled electron count unknown.
 
-    python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
-        --band-policy all-noncore
-
-Keep a fixed number of non-core bands::
-
-    python conversion/aims_to_deeptb.py CASE_DIR -o OUTPUT_DIR \
-        --band-policy fixed-noncore --noncore-bands N
-
-Input
------
-CASE_DIR must contain ``geometry.in`` and the selected FHI-aims band files
-(``band1*.out`` by default).
-
-Output
-------
-The output directory contains ``xdat.traj``, ``kpoints.npy``,
-``eigenvalues.npy``, ``info.json``, and ``conversion_report.json``.
-
-Band handling
--------------
-For H/B/C/N/O, the converter can infer frozen 1s core bands automatically:
-H contributes zero; B/C/N/O contribute one spatial core band per atom.
-``adaptive-factor`` removes these core bands and retains approximately
-``F * N_full`` consecutive non-core bands, where ``N_full`` is the initial
-contiguous fully occupied non-core manifold.  The selected window is expanded
-when necessary so that no band carrying non-negligible occupation is truncated.
-
-DFT eigenvalues are stored in the original FHI-aims energy gauge; no VBM or
-Fermi-level shift is applied.  Spin channels are not merged automatically.
-Use ``batch_aims_to_deeptb.py`` to convert a directory tree of calculations.
+Output: xdat.traj, kpoints.npy, eigenvalues.npy, occupations.npy, info.json,
+conversion_report.json. Coordinates, spectra and occupations stay paired in
+source order. Meshes are never interpreted as band paths. The inferred H/B/C/N/O
+1s core is stripped by the non-core policies; energies keep their native eV gauge.
+Use batch_aims_to_deeptb.py for a source tree.
 """
 
 from __future__ import annotations
@@ -55,8 +36,12 @@ import glob
 import json
 import math
 import re
-import sys
 from pathlib import Path
+
+# Support direct script invocation from any working directory.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conversion.sampling import add_conversion_sampling, resolve_conversion_sampling
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -1437,7 +1422,7 @@ def write_deeptb_dataset(
 def build_parser():
     p = argparse.ArgumentParser(
         description=(
-            "Convert one FHI-aims band calculation to DeePTB-SK format, "
+            "Convert one FHI-aims mesh or band-path calculation to DeePTB-SK format, "
             "with automatic core/occupation analysis."
         )
     )
@@ -1447,7 +1432,7 @@ def build_parser():
         type=Path,
         help=(
             "FHI-aims calculation directory containing geometry.in "
-            "and band files."
+            "and the selected mesh or band-path files."
         ),
     )
 
@@ -1471,8 +1456,7 @@ def build_parser():
         ),
     )
 
-    p.add_argument("--eigenvalue-source", choices=["band", "postscf"], default="band",
-                   help="Explicit path-band or dense post-SCF source; no automatic fallback")
+    add_conversion_sampling(p)
     p.add_argument("--ks-file", default="Final_KS_eigenvalues.dat")
     p.add_argument("--charge", type=float, default=None,
                    help="Explicit net charge (positive removes electrons); records modeled valence electron count")
@@ -1618,7 +1602,9 @@ def build_parser():
 
 
 def main():
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    resolve_conversion_sampling(args, parser)
 
     if args.occ_threshold < 0:
         print(
