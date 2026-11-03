@@ -44,7 +44,13 @@ Use ``batch_aims_to_deeptb.py`` to convert a directory tree of calculations.
 
 from __future__ import annotations
 
+try:
+    from .postscf_eigenvalues import parse_postscf_eigenvalues, require_scalar_control
+except ImportError:
+    from postscf_eigenvalues import parse_postscf_eigenvalues, require_scalar_control
+
 import argparse
+import hashlib
 import glob
 import json
 import math
@@ -91,6 +97,14 @@ CORE_BANDS_PER_ATOM: Dict[str, int] = {
     "N": 1,
     "O": 1,
 }
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _f(x: str) -> float:
@@ -991,6 +1005,9 @@ def write_deeptb_dataset(
     core_gap_warning: float,
     keep_boundary_duplicates: bool,
     overwrite: bool,
+    eigenvalue_source: str = "band",
+    ks_file: str = "Final_KS_eigenvalues.dat",
+    charge: Optional[float] = None,
 ):
     case_dir = case_dir.resolve()
     out_dir = out_dir.resolve()
@@ -1022,33 +1039,39 @@ def write_deeptb_dataset(
         symbols
     )
 
-    band_paths = [
-        Path(p) for p in glob.glob(str(case_dir / band_glob))
-    ]
-    band_paths.sort(key=natural_key)
+    if eigenvalue_source == "postscf":
+        require_scalar_control(case_dir)
+        band_paths = [case_dir / ks_file]
+        kpoints, occupations, eigenvalues = parse_postscf_eigenvalues(band_paths[0])
+        formats, dropped, possible_spin2 = ["postscf-blocks-eV"], 0, []
+    else:
+        band_paths = [
+            Path(p) for p in glob.glob(str(case_dir / band_glob))
+        ]
+        band_paths.sort(key=natural_key)
 
-    if not band_paths:
-        raise FileNotFoundError(
-            f"No band files match {case_dir / band_glob}"
+        if not band_paths:
+            raise FileNotFoundError(
+                f"No band files match {case_dir / band_glob}"
+            )
+
+        # Common FHI-aims convention: band2xxx may be the second collinear spin
+        # channel. Spin channels are intentionally not merged automatically.
+        possible_spin2 = sorted(
+            [Path(p).name for p in glob.glob(str(case_dir / "band2*.out"))],
+            key=natural_key,
         )
 
-    # Common FHI-aims convention: band2xxx may be the second collinear spin
-    # channel. Spin channels are intentionally not merged automatically.
-    possible_spin2 = sorted(
-        [Path(p).name for p in glob.glob(str(case_dir / "band2*.out"))],
-        key=natural_key,
-    )
-
-    (
-        kpoints,
-        occupations,
-        eigenvalues,
-        formats,
-        dropped,
-    ) = combine_segments(
-        band_paths,
-        dedupe_boundaries=not keep_boundary_duplicates,
-    )
+        (
+            kpoints,
+            occupations,
+            eigenvalues,
+            formats,
+            dropped,
+        ) = combine_segments(
+            band_paths,
+            dedupe_boundaries=not keep_boundary_duplicates,
+        )
 
     total_bands = eigenvalues.shape[1]
 
@@ -1092,12 +1115,24 @@ def write_deeptb_dataset(
     eig_sel = eigenvalues[:, lo:hi]
     occ_sel = occupations[:, lo:hi]
 
+    if charge is not None and not np.isfinite(charge):
+        raise ValueError("--charge must be finite")
+    valence = {"H": 1, "B": 3, "C": 4, "N": 5, "O": 6}
+    modeled_electrons = None
+    if (charge is not None and inferred_core_bands is not None
+            and selected_first == inferred_core_bands + 1
+            and all(x in valence for x in symbols)):
+        modeled_electrons = float(sum(valence[x] for x in symbols) - charge)
+        if modeled_electrons < 0 or modeled_electrons > 2 * eig_sel.shape[1]:
+            raise ValueError("Modeled electron count is outside the selected spectrum capacity")
+
     # DeePTB-SK eigenvalue layout:
     # [nframes, nkpoints, nbands]
     eig_out = eig_sel[np.newaxis, :, :]
 
     np.save(out_dir / "kpoints.npy", kpoints)
     np.save(out_dir / "eigenvalues.npy", eig_out)
+    np.save(out_dir / "occupations.npy", occ_sel[np.newaxis, :, :])
 
     with Trajectory(str(out_dir / "xdat.traj"), "w") as traj:
         traj.write(atoms)
@@ -1127,7 +1162,23 @@ def write_deeptb_dataset(
     )
 
     report = {
-        "converter_version": 5,
+        "converter_version": 6,
+        "eigenvalue_source": eigenvalue_source,
+        "kpoint_sampling": "mesh" if eigenvalue_source == "postscf" else "path",
+        "kpoint_coordinates": "fractional_reciprocal",
+        "energy_unit": "eV",
+        "source_files": [p.name for p in band_paths],
+        "input_sha256": {
+            p.name: sha256_file(p)
+            for p in [geometry_path, *band_paths, *([case_dir / "control.in"]
+                      if (case_dir / "control.in").exists() else [])]
+        },
+        "electron_count": {
+            "charge": charge,
+            "modeled_electrons": modeled_electrons,
+            "method": "neutral H/B/C/N/O valence sum minus explicit charge; core stripped",
+            "note": "Not inferred from unweighted k-point occupations; unknown unless charge supplied",
+        },
         "source_case": str(case_dir),
         "geometry": geometry_path.name,
         "natoms": natoms,
@@ -1420,6 +1471,12 @@ def build_parser():
         ),
     )
 
+    p.add_argument("--eigenvalue-source", choices=["band", "postscf"], default="band",
+                   help="Explicit path-band or dense post-SCF source; no automatic fallback")
+    p.add_argument("--ks-file", default="Final_KS_eigenvalues.dat")
+    p.add_argument("--charge", type=float, default=None,
+                   help="Explicit net charge (positive removes electrons); records modeled valence electron count")
+
     p.add_argument(
         "--band-glob",
         default="band1*.out",
@@ -1599,6 +1656,9 @@ def main():
             out_dir=args.output_dir,
             geometry_name=args.geometry,
             band_glob=args.band_glob,
+            eigenvalue_source=args.eigenvalue_source,
+            ks_file=args.ks_file,
+            charge=args.charge,
             strip_core=args.strip_core,
             conduction_bands=args.conduction_bands,
             noncore_bands=args.noncore_bands,

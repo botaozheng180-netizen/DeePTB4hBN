@@ -353,6 +353,10 @@ def plot_one_set(
     n_core = None
     n_all = None
     aims_dir = None
+    report_path = set_dir / "conversion_report.json"
+    report = load_json(report_path) if report_path.exists() else {}
+    if mode == "full" and report.get("kpoint_sampling") == "mesh":
+        raise ValueError("Dense meshes support --mode selected; full mode reloads path bands")
     if mode == "selected":
         spectrum = selected
     else:
@@ -369,8 +373,9 @@ def plot_one_set(
             if dmax > 2e-5:
                 raise ValueError(f"Converted target is not the expected non-core prefix; max |dE|={dmax:.3e} eV")
 
-    x = cumulative_k_distance(kpoints, atoms)
-    hs = find_hbn_high_symmetry_points(kpoints, x)
+    mesh = report.get("kpoint_sampling") == "mesh"
+    x = np.arange(len(kpoints)) if mesh else cumulative_k_distance(kpoints, atoms)
+    hs = [] if mesh else find_hbn_high_symmetry_points(kpoints, x)
     fig, ax = plt.subplots(figsize=(6.2, 5.0))
 
     c_left = metadata["corridor_left"]
@@ -380,7 +385,10 @@ def plot_one_set(
         ax.axhspan(c_left, c_right, color=shade, alpha=0.28, zorder=0)
 
     for ib in range(spectrum.shape[1]):
-        ax.plot(x, spectrum[:, ib], color="black", lw=linewidth, alpha=band_alpha, zorder=2)
+        if mesh:
+            ax.scatter(x, spectrum[:, ib], color="black", s=2, alpha=band_alpha, zorder=2)
+        else:
+            ax.plot(x, spectrum[:, ib], color="black", lw=linewidth, alpha=band_alpha, zorder=2)
 
     line_color = "#c62828"
     emin_abs = metadata["emin_abs"]
@@ -396,10 +404,10 @@ def plot_one_set(
         ax.set_xticks([item[1] for item in hs])
         ax.set_xticklabels([item[2] for item in hs])
     else:
-        ax.set_xlabel("k-path distance")
+        ax.set_xlabel("k-point index (mesh file order)" if mesh else "k-path distance")
 
     ax.set_ylabel("Energy (eV)")
-    ax.set_xlim(float(x[0]), float(x[-1]))
+    ax.set_xlim((-.5, .5) if len(x) == 1 else (float(x[0]), float(x[-1])))
 
     y_candidates = [float(np.min(spectrum)), float(np.max(spectrum))]
     for value in (emin_abs, emax_abs, c_left, c_right):
@@ -482,6 +490,7 @@ def plot_one_set(
         "set": set_dir.name,
         "set_dir": str(set_dir),
         "mode": mode,
+        "kpoint_sampling": "mesh" if mesh else "path",
         "status": "ok",
         "method": metadata["method"],
         "confidence": metadata["confidence"],
@@ -530,7 +539,7 @@ def make_contact_sheets(image_paths: list[Path], output_dir: Path, *, mode: str,
 def write_summary(output_dir: Path, records: list[dict]) -> Path:
     path = output_dir / "band_region_visualization_summary.csv"
     fields = [
-        "set", "set_dir", "mode", "status", "method", "confidence", "active_mode",
+        "set", "set_dir", "mode", "kpoint_sampling", "status", "method", "confidence", "active_mode",
         "window_file", "baseline_energy_eV", "emin_relative_eV", "emax_relative_eV",
         "emin_plot_eV", "emax_plot_eV", "corridor_left_eV", "corridor_right_eV",
         "split_mismatch_eV", "n_selected_bands", "n_plotted_bands",

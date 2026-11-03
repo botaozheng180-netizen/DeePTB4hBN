@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -90,6 +91,9 @@ def write_manifests(records: List[Dict], out_root: Path) -> None:
         "selected_first_band",
         "selected_last_band",
         "selected_band_count",
+        "eigenvalue_source",
+        "kpoint_sampling",
+        "modeled_electrons",
         "nkpoints",
         "spin2_detected",
         "error",
@@ -124,6 +128,9 @@ def build_parser():
     )
     p.add_argument("--geometry", default="geometry.in")
     p.add_argument("--band-glob", default="band1*.out")
+    p.add_argument("--eigenvalue-source", choices=["band", "postscf"], default="band")
+    p.add_argument("--ks-file", default="Final_KS_eigenvalues.dat")
+    p.add_argument("--charge", type=float, default=None)
     p.add_argument(
         "--band-policy",
         choices=["adaptive-factor", "all-noncore", "fixed-noncore"],
@@ -212,9 +219,16 @@ def main():
     if not converter.is_file():
         raise SystemExit(f"Converter not found: {converter}")
 
+    if output_root == input_root or input_root in output_root.parents:
+        raise SystemExit("Output root must be outside the source tree")
+    if args.resume and args.overwrite:
+        raise SystemExit("Choose --resume or --overwrite, not both")
     output_root.mkdir(parents=True, exist_ok=True)
 
-    cases = discover_cases(input_root, args.geometry, args.band_glob)
+    source_glob = args.ks_file if args.eigenvalue_source == "postscf" else args.band_glob
+    cases = discover_cases(input_root, args.geometry, source_glob)
+    if not cases:
+        raise SystemExit(f"No calculation folders contain {args.geometry} and {source_glob}")
     print(f"Discovered {len(cases)} candidate calculation folders.")
     print(f"Band policy: {args.band_policy}")
     if args.band_policy == "adaptive-factor":
@@ -233,7 +247,7 @@ def main():
 
         print(f"[{ordinal - args.start_index + 1}/{len(cases)}] {rel}")
 
-        if spin2 and not args.include_spin2:
+        if args.eigenvalue_source == "band" and spin2 and not args.include_spin2:
             print("  SKIP: band2*.out detected (possible second spin channel)")
             records.append({
                 "set_id": set_id,
@@ -250,6 +264,23 @@ def main():
         report_path = out_dir / "conversion_report.json"
         if args.resume and report_path.exists():
             report = load_report(report_path)
+            required = ("xdat.traj", "kpoints.npy", "eigenvalues.npy", "occupations.npy", "info.json")
+            input_files = [case / args.geometry, *sorted(case.glob(source_glob))]
+            if (case / "control.in").exists():
+                input_files.append(case / "control.in")
+            hashes = {}
+            for path in input_files:
+                with path.open("rb") as handle:
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                    hashes[path.name] = digest.hexdigest()
+            if (report.get("source_case") != str(case)
+                    or report.get("eigenvalue_source", "band") != args.eigenvalue_source
+                    or report.get("electron_count", {}).get("charge") != args.charge
+                    or report.get("input_sha256") != hashes
+                    or any(not (out_dir / name).is_file() for name in required)):
+                raise SystemExit(f"Refusing --resume for {out_dir}: source, charge, input hashes or outputs changed; use a fresh output root")
             selection = report.get("selection", {})
             report_policy = selection.get("band_policy_effective")
 
@@ -291,12 +322,17 @@ def main():
                 "--geometry", args.geometry,
                 "--band-glob", args.band_glob,
                 "--band-policy", args.band_policy,
+                "--eigenvalue-source", args.eigenvalue_source,
+                "--ks-file", args.ks_file,
             ]
 
             if args.band_policy == "adaptive-factor":
                 cmd.extend(["--band-factor", str(args.band_factor)])
             elif args.band_policy == "fixed-noncore":
                 cmd.extend(["--noncore-bands", str(args.noncore_bands)])
+
+            if args.charge is not None:
+                cmd.extend(["--charge", str(args.charge)])
 
             if args.overwrite:
                 cmd.append("--overwrite")
@@ -380,6 +416,9 @@ def main():
             "selected_first_band": selected_range[0],
             "selected_last_band": selected_range[1],
             "selected_band_count": selection.get("selected_band_count"),
+            "eigenvalue_source": report.get("eigenvalue_source", "band"),
+            "kpoint_sampling": report.get("kpoint_sampling", "path"),
+            "modeled_electrons": report.get("electron_count", {}).get("modeled_electrons"),
             "nkpoints": kshape[0],
             "spin2_detected": bool(
                 report.get("possible_second_spin_channel_files")
@@ -410,6 +449,8 @@ def main():
     print(f"  failed:        {failed}")
     print(f"  manifest:      {output_root / 'manifest.json'}")
     print(f"  CSV manifest:  {output_root / 'manifest.csv'}")
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

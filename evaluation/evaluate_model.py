@@ -388,7 +388,10 @@ def evaluate_one_case(
             f"{set_dir}: DFT nk={dft.shape[0]} does not match kpoints nk={kpoints.shape[0]}"
         )
 
-    xlist = calculate_xlist(structure_path, kpoints)
+    report_path = set_dir / "conversion_report.json"
+    sampling = json.loads(report_path.read_text()).get("kpoint_sampling", "path") if report_path.exists() else "path"
+    xlist = (np.arange(len(kpoints), dtype=float) if sampling == "mesh"
+             else calculate_xlist(structure_path, kpoints))
 
     # Each case gets an isolated DeePTB results directory because Band writes
     # bandstructure.npy into results_path.

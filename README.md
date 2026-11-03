@@ -107,6 +107,118 @@ python conversion/batch_aims_to_deeptb.py INPUT_ROOT OUTPUT_ROOT \
 
 Each calculation is stored as one `set.XXXXXX` directory. `manifest.json` and `manifest.csv` record source paths, conversion status, composition, band-selection metadata, and failures.
 
+### Dense-k post-SCF datasets
+
+Use an explicit source when converting the new dense-grid calculations:
+
+```bash
+python conversion/aims_to_deeptb.py CASE_DIR -o MESH_SET \
+    --eigenvalue-source postscf \
+    --band-policy adaptive-factor --band-factor 2.0
+
+python conversion/batch_aims_to_deeptb.py INPUT_ROOT MESH_DATA \
+    --eigenvalue-source postscf \
+    --band-policy adaptive-factor --band-factor 2.0
+```
+
+`postscf` discovers `geometry.in` plus `Final_KS_eigenvalues.dat`, even when
+there are no `band1*.out` files. Use `--ks-file NAME` for a different filename.
+`control.in` is required to check spin/SOC settings. The default source remains
+`band`, preserving existing command behavior. There is no automatic fallback or
+mixing of mesh and path spectra.
+
+The supported post-SCF format contains a fractional-coordinate header
+`# k-point in recip. lattice units: kx ky kz` followed by consecutive
+`state occupation eigenvalue` rows, with energies in **eV**. Fortran D exponents
+are accepted. The reader preserves file order and pairs every coordinate with
+its occupations and energies; it does not construct a grid from `control.in`.
+It rejects inconsistent/empty blocks, duplicate states or reciprocal k-points,
+nonfinite values, and recognized multi-spin layouts. Declared state/k-point
+counts are checked when present. A missing complete block cannot be detected
+without a declared count; independently confirm successful FHI-aims completion.
+Collinear spin and SOC are currently unsupported in this dense-grid route.
+
+The output contract is:
+
+| File | Shape / meaning |
+| --- | --- |
+| `xdat.traj` | One ASE structure |
+| `kpoints.npy` | `(Nk, 3)`, fractional reciprocal coordinates in source order |
+| `eigenvalues.npy` | `(1, Nk, Nb)`, selected reference energies in native eV gauge |
+| `occupations.npy` | `(1, Nk, Nb)`, occupations for the same selected states; diagnostic sidecar |
+| `info.json` | Existing DeePTB training metadata |
+| `conversion_report.json` | Source type, mesh/path sampling, input hashes, band selection and optional electron count |
+
+The `1` is one structure, not a spin axis. Geometry, k-points, occupations and
+energies must stay paired. Keep path calculations in a **separate dataset** for
+band-line validation; a mesh is not a high-symmetry path.
+
+For a known neutral calculation add `--charge 0`; for a charged calculation use
+its explicit net charge (positive removes electrons). With the inferred 1s core
+removed and the non-core spectrum starting at its first band, the report records
+`electron_count.modeled_electrons = sum(neutral valence contributions) - charge`
+using H:1, B:3, C:4, N:5, O:6. If charge is omitted or the window does not meet
+those conditions, the modeled count is unknown (`null`). No electron count is
+inferred from an unweighted sum over k-point occupations. This report field does
+not configure DeePTB's optional prediction-time electron/Fermi settings.
+
+Resume uses the same command plus `--resume`. It now checks source identity,
+source type, charge, band policy, input content hashes, and required output
+presence. Older reports without hashes must be regenerated in a fresh output
+root. Source changes or changes in the discovered set ordering are rejected
+rather than reusing a different calculation under an existing set ID. Batch
+failures return a nonzero exit code and remain recorded in the manifests.
+
+Use sibling source/output roots; nesting conversion output inside its source
+is blocked. For mixed charge states, convert groups separately with the correct
+charge, or omit `--charge` until per-case charge metadata is available.
+
+Existing splitting and energy-region weighting operate on the stored arrays and
+can be used with mesh data. Freeze structure membership and verify the source
+mapping in manifests before comparing mesh and path experiments; do not put the
+same physical structure in training via its mesh and validation via its path.
+
+| Diagnostic | Dense mesh support |
+| --- | --- |
+| `evaluate_model.py` | Stored-target errors at the actual mesh coordinates |
+| `evaluate_band_error.py --mode supervised` | Errors versus selected band index |
+| `visualize_band_regions.py --mode selected` | Scatter plot versus k-point index, with weighting boundaries |
+| Band plot and band+DOS plot scripts | Require a separate path dataset; reject mesh input |
+| Full non-core reload modes | Still path-based; use the supported selected/supervised mode for mesh sets |
+
+Generate mesh QA plots without a model checkpoint (NumPy, ASE and Matplotlib
+required):
+
+```bash
+python visualization/visualize_band_regions.py MESH_DATA --mode selected
+```
+
+Each mesh plot uses unconnected points versus the original k-point index,
+without high-symmetry labels or a path-distance axis. The QA summary CSV records
+`kpoint_sampling`. Energy-region shading appears when weighting metadata exists.
+
+The current DeePTB loss/evaluation gives equal weight to stored k-points; this
+change does not implement Brillouin-zone quadrature weights or DOS integration.
+Do not interpret averages over symmetry-reduced points as BZ-weighted metrics.
+
+Format reference: [FHI-aims `output postscf_eigenvalues`](https://www.fhi-aims.org/uploads/manual/Ch3/S56.html).
+Local validation uses synthetic fixtures; validate one representative NSCC output
+before converting the production tree. A real NSCC file and a trained DeePTB
+checkpoint are not included in this repository.
+
+Run the conversion and mesh QA regression checks locally:
+
+```bash
+python -m pip install numpy ase matplotlib
+python -m unittest discover -s tests -v
+python -m compileall -q conversion preprocessing evaluation visualization
+```
+
+The same checks run in GitHub Actions on pushes and pull requests. They cover
+coordinate/energy pairing, malformed spectra, occupations, optional charge,
+source-hash resume checks, legacy path conversion, and mesh QA behavior. Model
+inference still requires a separate DeePTB environment and checkpoint.
+
 ### 3. Split converted data into train/validation sets
 
 Create a reproducible 80/20 split:

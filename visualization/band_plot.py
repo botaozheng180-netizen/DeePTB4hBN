@@ -395,6 +395,10 @@ def main():
     set_dir = Path(args.set_dir)
     output_dir = Path(args.output)
 
+    report_path = set_dir / "conversion_report.json"
+    if report_path.exists() and json.loads(report_path.read_text()).get("kpoint_sampling") == "mesh":
+        raise ValueError("Band-path plotting requires a separate path dataset. This set contains a dense mesh; use evaluate_model.py or evaluate_band_error.py --mode supervised.")
+
     structure_path = set_dir / "xdat.traj"
     kpoints_path = set_dir / "kpoints.npy"
     supervised_path = set_dir / "eigenvalues.npy"

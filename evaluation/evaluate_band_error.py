@@ -594,6 +594,11 @@ def main():
     n_core = None
     n_dft_all = None
 
+    report_path = args.set_dir / "conversion_report.json"
+    if (args.mode == "full" and report_path.exists()
+            and json.loads(report_path.read_text()).get("kpoint_sampling") == "mesh"):
+        raise ValueError("Dense meshes support --mode supervised; full mode reloads path bands")
+
     if args.mode == "supervised":
         ref_raw = supervised_ref.copy()
     else:
